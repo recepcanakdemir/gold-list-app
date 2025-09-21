@@ -33,6 +33,8 @@ export const LIGHT_COLORS = {
   errorLight: '#FEE2E2',
   warning: '#F59E0B',
   warningLight: '#FEF3C7',
+  info: '#3B82F6',
+  infoLight: '#DBEAFE',
   
   // Chart Colors
   chartPrimary: '#F59E0B',
@@ -77,6 +79,8 @@ export const DARK_COLORS = {
   errorLight: '#7F1D1D',
   warning: '#F59E0B',
   warningLight: '#92400E',
+  info: '#3B82F6',
+  infoLight: '#1E3A8A',
   
   // Chart Colors
   chartPrimary: '#F59E0B',
@@ -101,12 +105,12 @@ export const TYPOGRAPHY = {
   '3xl': 30,
   '4xl': 36,
   
-  // Font Weights
-  normal: '400',
-  medium: '500',
-  semibold: '600',
-  bold: '700',
-  extrabold: '800',
+  // Font Weights - React Native compatible types
+  normal: '400' as const,
+  medium: '500' as const,
+  semibold: '600' as const,
+  bold: '700' as const,
+  extrabold: '800' as const,
 }
 
 export const SPACING = {

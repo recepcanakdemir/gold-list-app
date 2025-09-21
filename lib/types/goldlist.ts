@@ -1,5 +1,12 @@
 import { Tables } from './database'
 
+// Helper type aliases
+type NotebookRow = Tables<'notebooks'>['Row']
+type PageRow = Tables<'pages'>['Row']
+type WordRow = Tables<'words'>['Row']
+type ReviewRow = Tables<'reviews'>['Row']
+type ProfileRow = Tables<'profiles'>['Row']
+
 // Core Gold List Method types
 export type Round = 1 | 2 | 3 | 4
 export type NotebookLevel = 'bronze' | 'silver' | 'gold'
@@ -14,7 +21,7 @@ export interface GoldListSettings {
 }
 
 // Extended types with relationships
-export interface NotebookWithStats extends Tables<'notebooks'> {
+export interface NotebookWithStats extends NotebookRow {
   pendingReviews: number
   todaysTarget: number
   completedToday: boolean
@@ -22,14 +29,14 @@ export interface NotebookWithStats extends Tables<'notebooks'> {
   weeklyProgress: number
 }
 
-export interface PageWithWords extends Tables<'pages'> {
+export interface PageWithWords extends PageRow {
   words: WordWithReviews[]
-  notebook: Tables<'notebooks'>
+  notebook: NotebookRow
 }
 
-export interface WordWithReviews extends Tables<'words'> {
-  reviews: Tables<'reviews'>[]
-  page: Tables<'pages'>
+export interface WordWithReviews extends WordRow {
+  reviews: ReviewRow[]
+  page: PageRow
   nextReviewDate: Date | null
   daysSinceCreated: number
   isReadyForReview: boolean
@@ -86,7 +93,7 @@ export interface ReviewResponse {
 export interface InputSession {
   notebookId: string
   pageId: string
-  words: Partial<Tables<'words'>>[]
+  words: Partial<Tables<'words'>['Insert']>[]
   targetCount: number
   currentIndex: number
   mode: 'focus' | 'fullpage'
@@ -118,7 +125,7 @@ export interface AnalyticsData {
 
 // App state types
 export interface AppState {
-  user: Tables<'profiles'> | null
+  user: ProfileRow | null
   notebooks: NotebookWithStats[]
   currentNotebook: NotebookWithStats | null
   reviewSession: ReviewSession | null

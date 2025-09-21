@@ -2,11 +2,10 @@ import { Tables } from '../types/database'
 import { NotebookWithStats, WordWithReviews, PageWithWords } from '../types/goldlist'
 
 // Mock user profile
-export const mockProfile: Tables<'profiles'> = {
+export const mockProfile: Tables<'profiles'>['Row'] = {
   id: 'mock-user-id',
   email: 'user@example.com',
   created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-15T00:00:00Z',
   subscription_status: 'weekly',
   subscription_expires_at: '2024-12-31T23:59:59Z',
   streak_count: 12,
@@ -566,10 +565,10 @@ export const mockDataService = {
     meaning: string
     notes?: string
     position_in_page: number
-  }>): Promise<Tables<'words'>[]> {
+  }>): Promise<Tables<'words'>['Row'][]> {
     await this.delay(800)
     
-    const newWords: Tables<'words'>[] = words.map((word, index) => ({
+    const newWords: Tables<'words'>['Row'][] = words.map((word, index) => ({
       id: `word-${Date.now()}-${index}`,
       page_id: pageId,
       word: word.word,

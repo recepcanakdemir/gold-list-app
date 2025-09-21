@@ -61,7 +61,7 @@ export default function TabLayout() {
           >
             <IconSymbol
               size={24}
-              name={tab.icon}
+              name={tab.icon as any}
               color={currentPage === index ? colors.primary : colors.textSecondary}
             />
             <Text

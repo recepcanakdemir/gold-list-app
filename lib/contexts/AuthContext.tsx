@@ -7,7 +7,7 @@ import { profileOperations } from '../supabase/operations'
 interface AuthContextType {
   session: Session | null
   user: User | null
-  profile: Tables<'profiles'> | null
+  profile: Tables<'profiles'>['Row'] | null
   loading: boolean
   signUp: (email: string, password: string) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
@@ -32,7 +32,7 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<Session | null>(null)
-  const [profile, setProfile] = useState<Tables<'profiles'> | null>(null)
+  const [profile, setProfile] = useState<Tables<'profiles'>['Row'] | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

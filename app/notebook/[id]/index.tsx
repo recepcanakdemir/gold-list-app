@@ -302,7 +302,7 @@ export default function NotebookDetailsScreen() {
       
       {/* Notebook Language Info */}
       <View style={styles.languageHeader}>
-        <Text style={styles.languageFlag}>{FLAG_EMOJIS[notebook.language_code] || '🌍'}</Text>
+        <Text style={styles.languageFlag}>{FLAG_EMOJIS[notebook.language_code as keyof typeof FLAG_EMOJIS] || '🌍'}</Text>
         <Text style={styles.languageText}>{notebook.language}</Text>
       </View>
 

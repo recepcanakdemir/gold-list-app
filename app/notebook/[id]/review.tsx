@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback, memo, useLayoutEffect } from 'react'
 import {
   View,
   Text,
@@ -30,6 +30,7 @@ export default function ReviewScreen() {
   const [words, setWords] = useState<WordWithReviews[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [showMeaning, setShowMeaning] = useState(false)
+  
   const [reviewedWords, setReviewedWords] = useState<{
     remembered: number
     forgotten: number
@@ -38,11 +39,19 @@ export default function ReviewScreen() {
   const [sessionStartTime] = useState(Date.now())
   const [loading, setLoading] = useState(true)
 
-  // Animation values - Tinder-style with directional rotation
-  const translateX = useRef(new Animated.Value(0)).current
-  const rotate = useRef(new Animated.Value(0)).current
-  const scale = useRef(new Animated.Value(1)).current
-  const opacity = useRef(new Animated.Value(1)).current
+  // Animation values for card deck - each card has independent animations
+  const currentCardTranslateX = useRef(new Animated.Value(0)).current
+  const currentCardRotate = useRef(new Animated.Value(0)).current
+  const currentCardScale = useRef(new Animated.Value(1)).current
+  const currentCardOpacity = useRef(new Animated.Value(1)).current
+  
+  const nextCardScale = useRef(new Animated.Value(0.95)).current
+  const nextCardOpacity = useRef(new Animated.Value(0.8)).current
+  const nextCardTranslateY = useRef(new Animated.Value(10)).current
+  
+  // Refs for immediate visual state (no re-renders)
+  const visualCurrentIndex = useRef(0)
+  const visualStats = useRef({ remembered: 0, forgotten: 0, total: 0 })
 
   // Pre-calculate colors for all words to prevent flash
   const wordColorsMap = useMemo(() => {
@@ -57,6 +66,21 @@ export default function ReviewScreen() {
   useEffect(() => {
     loadReviewData()
   }, [id])
+  
+  // Initialize visual refs
+  useEffect(() => {
+    visualCurrentIndex.current = currentIndex
+    visualStats.current = { ...reviewedWords }
+  }, [currentIndex, reviewedWords])
+  
+  // UseLayoutEffect for flicker-free UI updates
+  useLayoutEffect(() => {
+    // This ensures DOM updates happen synchronously before paint
+    if (visualCurrentIndex.current !== currentIndex) {
+      // Sync any remaining state if needed
+    }
+  }, [currentIndex])
+  
 
   const loadReviewData = async () => {
     try {
@@ -86,22 +110,31 @@ export default function ReviewScreen() {
   const handleGesture = (event: any) => {
     const { translationX } = event.nativeEvent
     
-    // Horizontal movement with Tinder-style directional rotation
-    translateX.setValue(translationX)
+    // Current card animations
+    currentCardTranslateX.setValue(translationX)
     
     // 30 degree rotation based on swipe direction (like Tinder)
     const maxRotation = 30 // degrees
     const rotationValue = (translationX / SCREEN_WIDTH) * maxRotation
-    rotate.setValue(rotationValue)
+    currentCardRotate.setValue(rotationValue)
     
     // Subtle scale effect based on distance from center
     const progress = Math.abs(translationX) / SCREEN_WIDTH
     const scaleValue = 1 - progress * 0.05 // Very subtle scale (0.95 minimum)
-    scale.setValue(scaleValue)
+    currentCardScale.setValue(scaleValue)
     
     // Fade effect based on swipe distance
     const opacityValue = 1 - progress * 0.3 // Fade to 0.7 minimum
-    opacity.setValue(opacityValue)
+    currentCardOpacity.setValue(opacityValue)
+    
+    // Next card reveal animations - as current card moves, next card scales up
+    const nextCardScaleValue = 0.95 + (progress * 0.05) // Scale from 0.95 to 1.0
+    const nextCardOpacityValue = 0.8 + (progress * 0.2) // Opacity from 0.8 to 1.0
+    const nextCardTranslateYValue = 10 - (progress * 10) // Move up from 10px to 0px
+    
+    nextCardScale.setValue(nextCardScaleValue)
+    nextCardOpacity.setValue(nextCardOpacityValue)
+    nextCardTranslateY.setValue(nextCardTranslateYValue)
   }
 
   const handleGestureEnd = (event: any) => {
@@ -128,26 +161,45 @@ export default function ReviewScreen() {
 
   const resetCardPosition = () => {
     Animated.parallel([
-      Animated.spring(translateX, { 
+      Animated.spring(currentCardTranslateX, { 
         toValue: 0, 
         useNativeDriver: true,
         tension: 100,
         friction: 8
       }),
-      Animated.spring(rotate, { 
+      Animated.spring(currentCardRotate, { 
         toValue: 0, 
         useNativeDriver: true,
         tension: 100,
         friction: 8
       }),
-      Animated.spring(scale, { 
+      Animated.spring(currentCardScale, { 
         toValue: 1, 
         useNativeDriver: true,
         tension: 100,
         friction: 8
       }),
-      Animated.spring(opacity, { 
+      Animated.spring(currentCardOpacity, { 
         toValue: 1, 
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8
+      }),
+      // Reset next card to background position
+      Animated.spring(nextCardScale, { 
+        toValue: 0.95, 
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8
+      }),
+      Animated.spring(nextCardOpacity, { 
+        toValue: 0.8, 
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8
+      }),
+      Animated.spring(nextCardTranslateY, { 
+        toValue: 10, 
         useNativeDriver: true,
         tension: 100,
         friction: 8
@@ -165,56 +217,86 @@ export default function ReviewScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
     }
 
-    // Smooth card exit animation with full rotation
+    // Smooth card deck transition
     const toX = direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2
-    const toRotation = direction === 'right' ? 30 : -30 // Full 30 degree lean on exit
+    const toRotation = direction === 'right' ? 30 : -30
     
     Animated.parallel([
-      Animated.timing(translateX, {
+      // Current card exit animation
+      Animated.timing(currentCardTranslateX, {
         toValue: toX,
-        duration: 250, // Faster for snappier feel
+        duration: 250,
         useNativeDriver: true,
       }),
-      Animated.timing(rotate, {
+      Animated.timing(currentCardRotate, {
         toValue: toRotation,
         duration: 250,
         useNativeDriver: true,
       }),
-      Animated.timing(scale, {
+      Animated.timing(currentCardScale, {
         toValue: 0.8,
         duration: 250,
         useNativeDriver: true,
       }),
-      Animated.timing(opacity, {
+      Animated.timing(currentCardOpacity, {
         toValue: 0,
-        duration: 200, // Fade out quickly
+        duration: 200,
         useNativeDriver: true,
       }),
-    ]).start(() => {
-      processReview(remembered)
-    })
+      
+      // Next card becomes current (smooth reveal)
+      Animated.timing(nextCardScale, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(nextCardOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(nextCardTranslateY, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start()
+
+    // Complete transition immediately when animation starts
+    // This prevents the "refresh effect" by updating state before the animation delay
+    completeCardTransition(remembered)
   }
 
-  const processReview = async (remembered: boolean) => {
-    const currentWord = words[currentIndex]
+  const completeCardTransition = async (remembered: boolean) => {
+    const currentWord = words[visualCurrentIndex.current]
     
     try {
       await mockDataService.processWordReview(currentWord.id, remembered)
       
-      // Update review stats
-      setReviewedWords(prev => ({
-        remembered: prev.remembered + (remembered ? 1 : 0),
-        forgotten: prev.forgotten + (remembered ? 0 : 1),
-        total: prev.total + 1,
-      }))
-
-      // Move to next word
-      if (currentIndex < words.length - 1) {
-        setCurrentIndex(currentIndex + 1)
-        setShowMeaning(false)
-        resetAnimations()
+      // Update refs immediately (no re-render)
+      visualStats.current = {
+        remembered: visualStats.current.remembered + (remembered ? 1 : 0),
+        forgotten: visualStats.current.forgotten + (remembered ? 0 : 1),
+        total: visualStats.current.total + 1,
+      }
+      
+      if (visualCurrentIndex.current < words.length - 1) {
+        visualCurrentIndex.current += 1
+        
+        // Batch all React state updates together (single re-render)
+        React.startTransition(() => {
+          setCurrentIndex(visualCurrentIndex.current)
+          setReviewedWords({ ...visualStats.current })
+          setShowMeaning(false)
+        })
+        
+        resetAnimationsForNewCard()
       } else {
         // Review session complete
+        React.startTransition(() => {
+          setCurrentIndex(visualCurrentIndex.current)
+          setReviewedWords({ ...visualStats.current })
+        })
         completeReviewSession()
       }
     } catch (error) {
@@ -222,11 +304,30 @@ export default function ReviewScreen() {
     }
   }
 
+  const processReview = async (remembered: boolean) => {
+    // Kept for compatibility, redirects to new function
+    await completeCardTransition(remembered)
+  }
+
+  const resetAnimationsForNewCard = () => {
+    // Reset animations immediately without triggering re-renders
+    requestAnimationFrame(() => {
+      // Reset current card to ready state (the next card is now current)
+      currentCardTranslateX.setValue(0)
+      currentCardRotate.setValue(0)
+      currentCardScale.setValue(1)
+      currentCardOpacity.setValue(1)
+      
+      // Reset next card to background position for new next card
+      nextCardScale.setValue(0.95)
+      nextCardOpacity.setValue(0.8)
+      nextCardTranslateY.setValue(10)
+    })
+  }
+
   const resetAnimations = () => {
-    translateX.setValue(0)
-    rotate.setValue(0)
-    scale.setValue(1)
-    opacity.setValue(1)
+    // Legacy function, redirect to new implementation
+    resetAnimationsForNewCard()
   }
 
   const completeReviewSession = () => {
@@ -256,10 +357,160 @@ export default function ReviewScreen() {
     )
   }
 
-  const handleCardTap = () => {
+  const handleCardTap = useCallback(() => {
     setShowMeaning(!showMeaning)
     Haptics.selectionAsync()
-  }
+  }, [showMeaning])
+  
+  // Memoized card components to prevent re-renders
+  const CurrentCard = memo(({ word, roundColors, showMeaning }: { 
+    word: WordWithReviews, 
+    roundColors: any, 
+    showMeaning: boolean 
+  }) => (
+    <PanGestureHandler
+      onGestureEvent={handleGesture}
+      onHandlerStateChange={(event) => {
+        if (event.nativeEvent.state === State.END) {
+          handleGestureEnd(event)
+        }
+      }}
+    >
+      <Animated.View
+        style={[
+          styles.card,
+          styles.currentCard,
+          {
+            borderColor: roundColors.primary,
+            backgroundColor: roundColors.light,
+            transform: [
+              { translateX: currentCardTranslateX },
+              { rotate: currentCardRotate.interpolate({
+                inputRange: [-30, 30],
+                outputRange: ['-30deg', '30deg']
+              }) },
+              { scale: currentCardScale }
+            ],
+            opacity: currentCardOpacity,
+            zIndex: 2
+          }
+        ]}
+      >
+        <TouchableOpacity style={styles.cardContent} onPress={handleCardTap} activeOpacity={0.8}>
+          {/* Word side */}
+          {!showMeaning && (
+            <View style={styles.cardSide}>
+              <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
+              {word.notes && (
+                <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
+              )}
+              <Text style={[styles.tapHint, { color: '#000000' }]}>Tap to reveal meaning</Text>
+            </View>
+          )}
+
+          {/* Meaning side */}
+          {showMeaning && (
+            <View style={styles.cardSide}>
+              <Text style={[styles.cardMeaning, { color: '#000000' }]}>{word.meaning}</Text>
+              <Text style={[styles.cardOriginal, { color: '#000000' }]}>{word.word}</Text>
+              {word.notes && (
+                <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
+              )}
+              <Text style={[styles.swipeHint, { color: '#000000' }]}>Swipe or use buttons below</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* Swipe indicators */}
+        <Animated.View
+          style={[
+            styles.swipeIndicator,
+            styles.leftIndicator,
+            {
+              opacity: currentCardTranslateX.interpolate({
+                inputRange: [-SCREEN_WIDTH, -80, 0],
+                outputRange: [1, 0.9, 0],
+                extrapolate: 'clamp'
+              }),
+              transform: [{
+                scale: currentCardTranslateX.interpolate({
+                  inputRange: [-SCREEN_WIDTH, -80, 0],
+                  outputRange: [1.2, 1.1, 0.8],
+                  extrapolate: 'clamp'
+                })
+              }]
+            }
+          ]}
+        >
+          <Text style={[styles.indicatorText, styles.forgotText]}>❌ FORGOT</Text>
+        </Animated.View>
+
+        <Animated.View
+          style={[
+            styles.swipeIndicator,
+            styles.rightIndicator,
+            {
+              opacity: currentCardTranslateX.interpolate({
+                inputRange: [0, 80, SCREEN_WIDTH],
+                outputRange: [0, 0.9, 1],
+                extrapolate: 'clamp'
+              }),
+              transform: [{
+                scale: currentCardTranslateX.interpolate({
+                  inputRange: [0, 80, SCREEN_WIDTH],
+                  outputRange: [0.8, 1.1, 1.2],
+                  extrapolate: 'clamp'
+                })
+              }]
+            }
+          ]}
+        >
+          <Text style={[styles.indicatorText, styles.rememberedText]}>✅ REMEMBERED</Text>
+        </Animated.View>
+      </Animated.View>
+    </PanGestureHandler>
+  ), (prevProps, nextProps) => {
+    // Only re-render if word ID, round colors, or showMeaning actually change
+    return prevProps.word.id === nextProps.word.id && 
+           prevProps.roundColors.primary === nextProps.roundColors.primary &&
+           prevProps.showMeaning === nextProps.showMeaning
+  })
+
+  const NextCard = memo(({ word, roundColors }: { 
+    word: WordWithReviews, 
+    roundColors: any 
+  }) => (
+    <Animated.View
+      style={[
+        styles.card,
+        styles.nextCard,
+        {
+          borderColor: roundColors.primary,
+          backgroundColor: roundColors.light,
+          transform: [
+            { scale: nextCardScale },
+            { translateY: nextCardTranslateY }
+          ],
+          opacity: nextCardOpacity,
+          zIndex: 1
+        }
+      ]}
+    >
+      <View style={styles.cardContent}>
+        <View style={styles.cardSide}>
+          <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
+          {word.notes && (
+            <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
+          )}
+          <Text style={[styles.tapHint, { color: '#000000' }]}>Tap to reveal meaning</Text>
+        </View>
+      </View>
+    </Animated.View>
+  ), (prevProps, nextProps) => {
+    // Only re-render if word ID or round colors actually change
+    return prevProps.word.id === nextProps.word.id && 
+           prevProps.roundColors.primary === nextProps.roundColors.primary
+  })
 
   const handleButtonPress = (remembered: boolean) => {
     handleSwipe(remembered ? 'right' : 'left')
@@ -288,10 +539,14 @@ export default function ReviewScreen() {
     )
   }
 
-  const currentWord = words[currentIndex]
-  const roundColors = wordColorsMap.get(currentWord.id) || ROUND_COLORS[1]
-  const styles = createStyles(colors, roundColors)
-  const progress = (currentIndex + 1) / words.length
+  // Use visual state for most current rendering (prevents lag)
+  const displayIndex = Math.max(visualCurrentIndex.current, currentIndex)
+  const currentWord = words[displayIndex]
+  const nextWord = words[displayIndex + 1]
+  const roundColors = wordColorsMap.get(currentWord?.id) || ROUND_COLORS[1]
+  const nextRoundColors = wordColorsMap.get(nextWord?.id) || ROUND_COLORS[1]
+  const styles = createStyles(colors)
+  const progress = (displayIndex + 1) / words.length
 
   return (
     <SafeAreaView style={styles.container}>
@@ -336,115 +591,26 @@ export default function ReviewScreen() {
         </View>
       </View>
 
-      {/* Card Stack */}
+      {/* Card Deck Stack */}
       <View style={styles.cardContainer}>
-        {/* Next card preview */}
-        {currentIndex < words.length - 1 && (
-          <View style={[styles.card, styles.nextCard, { borderColor: roundColors.primary }]}>
-            <Text style={styles.cardWord}>{words[currentIndex + 1].word}</Text>
-          </View>
+        {/* Next card (background) - Pre-loaded and ready */}
+        {nextWord && (
+          <NextCard 
+            key={`next-${nextWord.id}`}
+            word={nextWord} 
+            roundColors={nextRoundColors} 
+          />
         )}
 
-        {/* Current card */}
-        <PanGestureHandler
-          onGestureEvent={handleGesture}
-          onHandlerStateChange={(event) => {
-            if (event.nativeEvent.state === State.END) {
-              handleGestureEnd(event)
-            }
-          }}
-        >
-          <Animated.View
-            style={[
-              styles.card,
-              styles.currentCard,
-              { borderColor: roundColors.primary },
-              {
-                transform: [
-                  { translateX },
-                  { rotate: rotate.interpolate({
-                    inputRange: [-30, 30],
-                    outputRange: ['-30deg', '30deg']
-                  }) },
-                  { scale }
-                ],
-                opacity
-              }
-            ]}
-          >
-            <TouchableOpacity style={styles.cardContent} onPress={handleCardTap} activeOpacity={0.8}>
-              {/* Word side */}
-              {!showMeaning && (
-                <View style={styles.cardSide}>
-                  <Text style={[styles.cardWord, { color: '#000000' }]}>{currentWord.word}</Text>
-                  {currentWord.notes && (
-                    <Text style={[styles.cardNotes, { color: '#000000' }]}>{currentWord.notes}</Text>
-                  )}
-                  <Text style={[styles.tapHint, { color: '#000000' }]}>Tap to reveal meaning</Text>
-                </View>
-              )}
-
-              {/* Meaning side */}
-              {showMeaning && (
-                <View style={styles.cardSide}>
-                  <Text style={[styles.cardMeaning, { color: '#000000' }]}>{currentWord.meaning}</Text>
-                  <Text style={[styles.cardOriginal, { color: '#000000' }]}>{currentWord.word}</Text>
-                  {currentWord.notes && (
-                    <Text style={[styles.cardNotes, { color: '#000000' }]}>{currentWord.notes}</Text>
-                  )}
-                  <Text style={[styles.swipeHint, { color: '#000000' }]}>Swipe or use buttons below</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-
-            {/* Swipe indicators - Tinder-style */}
-            <Animated.View
-              style={[
-                styles.swipeIndicator,
-                styles.leftIndicator,
-                {
-                  opacity: translateX.interpolate({
-                    inputRange: [-SCREEN_WIDTH, -80, 0],
-                    outputRange: [1, 0.9, 0],
-                    extrapolate: 'clamp'
-                  }),
-                  transform: [{
-                    scale: translateX.interpolate({
-                      inputRange: [-SCREEN_WIDTH, -80, 0],
-                      outputRange: [1.2, 1.1, 0.8],
-                      extrapolate: 'clamp'
-                    })
-                  }]
-                }
-              ]}
-            >
-              <Text style={[styles.indicatorText, styles.forgotText]}>❌ FORGOT</Text>
-            </Animated.View>
-
-            <Animated.View
-              style={[
-                styles.swipeIndicator,
-                styles.rightIndicator,
-                {
-                  opacity: translateX.interpolate({
-                    inputRange: [0, 80, SCREEN_WIDTH],
-                    outputRange: [0, 0.9, 1],
-                    extrapolate: 'clamp'
-                  }),
-                  transform: [{
-                    scale: translateX.interpolate({
-                      inputRange: [0, 80, SCREEN_WIDTH],
-                      outputRange: [0.8, 1.1, 1.2],
-                      extrapolate: 'clamp'
-                    })
-                  }]
-                }
-              ]}
-            >
-              <Text style={[styles.indicatorText, styles.rememberedText]}>✅ REMEMBERED</Text>
-            </Animated.View>
-          </Animated.View>
-        </PanGestureHandler>
+        {/* Current card (top) - Fully interactive */}
+        {currentWord && (
+          <CurrentCard 
+            key={`current-${currentWord.id}`}
+            word={currentWord} 
+            roundColors={roundColors} 
+            showMeaning={showMeaning} 
+          />
+        )}
       </View>
 
       {/* Action Buttons */}
@@ -452,7 +618,6 @@ export default function ReviewScreen() {
         <TouchableOpacity
           style={[styles.actionButton, styles.forgotButton]}
           onPress={() => handleButtonPress(false)}
-          disabled={!showMeaning}
         >
           <Text style={styles.actionButtonIcon}>❌</Text>
           <Text style={styles.actionButtonText}>Forgot</Text>
@@ -471,7 +636,6 @@ export default function ReviewScreen() {
         <TouchableOpacity
           style={[styles.actionButton, styles.rememberedButton]}
           onPress={() => handleButtonPress(true)}
-          disabled={!showMeaning}
         >
           <Text style={styles.actionButtonIcon}>✅</Text>
           <Text style={styles.actionButtonText}>Remember</Text>
@@ -488,7 +652,7 @@ export default function ReviewScreen() {
   )
 }
 
-const createStyles = (colors: any, roundColors?: any) => StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -594,7 +758,7 @@ const createStyles = (colors: any, roundColors?: any) => StyleSheet.create({
   card: {
     width: SCREEN_WIDTH - 40,
     height: SCREEN_HEIGHT * 0.5,
-    backgroundColor: roundColors ? roundColors.light : colors.cardBackground,
+    backgroundColor: colors.cardBackground, // Default background, will be overridden inline
     borderRadius: 20,
     borderWidth: 3,
     shadowColor: '#000',
@@ -608,12 +772,15 @@ const createStyles = (colors: any, roundColors?: any) => StyleSheet.create({
   },
   nextCard: {
     position: 'absolute',
-    opacity: 0.8,
-    transform: [{ scale: 0.95 }],
-    zIndex: 1,
+    top: 0,
+    left: 20, // Match cardContainer padding
+    right: 20,
   },
   currentCard: {
-    zIndex: 2,
+    position: 'absolute',
+    top: 0,
+    left: 20, // Match cardContainer padding
+    right: 20,
   },
   cardContent: {
     flex: 1,

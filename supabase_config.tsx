@@ -649,11 +649,8 @@ export const utils = {
   }
 }
 
-// Export everything
-export {
-  supabase as default,
-  supabase,
-}
+// Export as default
+export default supabase
 
 // =============================================
 // USAGE EXAMPLES

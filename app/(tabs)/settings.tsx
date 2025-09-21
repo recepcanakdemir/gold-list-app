@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   Switch,
   Alert,
@@ -222,7 +221,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     ...SHADOWS.sm,
   },
   profileInfo: {
-    alignItems: 'center',
+    alignItems: 'center' as const,
   },
   profileName: {
     fontSize: TYPOGRAPHY.lg,
@@ -243,9 +242,9 @@ const createStyles = (colors: any) => StyleSheet.create({
     ...SHADOWS.sm,
   },
   settingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
   },
   settingInfo: {
     flex: 1,
@@ -262,8 +261,8 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
   },
   counter: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
     gap: SPACING.md,
   },
   counterButton: {
@@ -271,8 +270,8 @@ const createStyles = (colors: any) => StyleSheet.create({
     height: 32,
     borderRadius: 16,
     backgroundColor: colors.gray200,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
   },
   counterButtonText: {
     fontSize: TYPOGRAPHY.lg,
@@ -284,14 +283,14 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.textPrimary,
     minWidth: 30,
-    textAlign: 'center',
+    textAlign: 'center' as const,
   },
   saveButton: {
     backgroundColor: colors.primary,
     marginHorizontal: SPACING.xl,
     borderRadius: RADIUS.lg,
     padding: SPACING.lg,
-    alignItems: 'center',
+    alignItems: 'center' as const,
     marginBottom: SPACING.md,
     ...SHADOWS.sm,
   },
@@ -305,7 +304,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     marginHorizontal: SPACING.xl,
     borderRadius: RADIUS.lg,
     padding: SPACING.lg,
-    alignItems: 'center',
+    alignItems: 'center' as const,
     ...SHADOWS.sm,
   },
   signOutButtonText: {

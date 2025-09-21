@@ -27,6 +27,7 @@ export default function DashboardScreen() {
   const { colors } = useTheme()
   const [refreshing, setRefreshing] = useState(false)
   const [selectedPeriod, setSelectedPeriod] = useState<'D' | 'W' | 'M'>('W')
+  const [currentPage, setCurrentPage] = useState(0)
   const insets = useSafeAreaInsets()
 
   useEffect(() => {
@@ -54,31 +55,37 @@ export default function DashboardScreen() {
   }
 
   const getActivityColor = (intensity: number) => {
+    // GitHub's authentic green color scale (light mode)
     const activityColors = [
-      colors.gray100,     // 0 - no activity
-      '#FEF3C7',          // 1 - light
-      '#FCD34D',          // 2 - medium
-      '#F59E0B',          // 3 - high
-      '#D97706',          // 4 - very high
+      '#ebedf0',   // 0 - no activity (GitHub's exact gray)
+      '#9be9a8',   // 1 - few contributions (GitHub's lightest green)
+      '#40c463',   // 2 - some contributions (GitHub's light green)
+      '#30a14e',   // 3 - many contributions (GitHub's medium green)
+      '#216e39',   // 4 - most contributions (GitHub's darkest green)
     ]
     return activityColors[intensity] || activityColors[0]
   }
 
-  // Generate activity heatmap data (7 days x 15 weeks = ~3.5 months)
-  const generateActivityData = () => {
-    const weeks = []
-    for (let week = 0; week < 15; week++) {
-      const days = []
-      for (let day = 0; day < 7; day++) {
+  // Generate habit tracker heatmap like HabitKit (7 rows x 25 columns)
+  const generateHabitHeatmap = () => {
+    const rows = 7 // 7 rows
+    const cols = 25 // Keep 25 columns as requested
+    const heatmapData = []
+    
+    for (let row = 0; row < rows; row++) {
+      const rowData = []
+      for (let col = 0; col < cols; col++) {
+        // Generate random activity (0-4 intensity)
         const intensity = Math.floor(Math.random() * 5)
-        days.push(intensity)
+        rowData.push(intensity)
       }
-      weeks.push(days)
+      heatmapData.push(rowData)
     }
-    return weeks
+    
+    return heatmapData
   }
 
-  const activityData = generateActivityData()
+  const habitHeatmapData = generateHabitHeatmap()
 
   const styles = createStyles(colors)
 
@@ -147,53 +154,24 @@ export default function DashboardScreen() {
         {/* Activity Heatmap */}
         <View style={styles.activityCard}>
           <Text style={styles.activityTitle}>Activity</Text>
-          <Text style={styles.activitySubtitle}>Your learning activity over the last 15 weeks</Text>
+          <Text style={styles.activitySubtitle}>Your learning activity over the last year</Text>
           
-          <View style={styles.heatmapContainer}>
-            <View style={styles.weekLabels}>
-              {['', '', 'Jan', '', '', 'Feb', '', '', 'Mar', '', '', 'Apr', '', '', ''].map((month, index) => (
-                <Text key={index} style={styles.monthLabel}>{month}</Text>
+          {/* Habit tracker heatmap */}
+          <View style={styles.habitHeatmapContainer}>
+            <View style={styles.habitGrid}>
+              {habitHeatmapData.map((row, rowIndex) => (
+                <View key={rowIndex} style={styles.habitRow}>
+                  {row.map((intensity, colIndex) => (
+                    <View
+                      key={colIndex}
+                      style={[
+                        styles.habitSquare,
+                        { backgroundColor: getActivityColor(intensity) }
+                      ]}
+                    />
+                  ))}
+                </View>
               ))}
-            </View>
-            
-            <View style={styles.heatmapGrid}>
-              <View style={styles.dayLabels}>
-                {['Mon', '', 'Wed', '', 'Fri', '', ''].map((day, index) => (
-                  <Text key={index} style={styles.dayLabel}>{day}</Text>
-                ))}
-              </View>
-              
-              <View style={styles.activityGrid}>
-                {activityData.map((week, weekIndex) => (
-                  <View key={weekIndex} style={styles.weekColumn}>
-                    {week.map((intensity, dayIndex) => (
-                      <View
-                        key={dayIndex}
-                        style={[
-                          styles.activitySquare,
-                          { backgroundColor: getActivityColor(intensity) }
-                        ]}
-                      />
-                    ))}
-                  </View>
-                ))}
-              </View>
-            </View>
-            
-            <View style={styles.heatmapLegend}>
-              <Text style={styles.legendText}>Less</Text>
-              <View style={styles.legendSquares}>
-                {[0, 1, 2, 3, 4].map((intensity) => (
-                  <View
-                    key={intensity}
-                    style={[
-                      styles.legendSquare,
-                      { backgroundColor: getActivityColor(intensity) }
-                    ]}
-                  />
-                ))}
-              </View>
-              <Text style={styles.legendText}>More</Text>
             </View>
           </View>
         </View>
@@ -310,64 +288,20 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
     marginBottom: SPACING.xl,
   },
-  heatmapContainer: {
-    alignItems: 'center',
+  habitHeatmapContainer: {
+    paddingVertical: SPACING.md,
   },
-  weekLabels: {
+  habitGrid: {
+    gap: 2, // Smaller gap between rows
+  },
+  habitRow: {
     flexDirection: 'row',
-    marginBottom: SPACING.xs,
-    paddingLeft: 30,
+    gap: 2, // Smaller gap between squares in a row
   },
-  monthLabel: {
-    width: 12,
-    fontSize: TYPOGRAPHY.xs,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  heatmapGrid: {
-    flexDirection: 'row',
-    marginBottom: SPACING.md,
-  },
-  dayLabels: {
-    justifyContent: 'space-between',
-    paddingRight: SPACING.sm,
-    width: 30,
-  },
-  dayLabel: {
-    fontSize: TYPOGRAPHY.xs,
-    color: colors.textSecondary,
-    height: 12,
-    textAlign: 'right',
-  },
-  activityGrid: {
-    flexDirection: 'row',
-    gap: 2,
-  },
-  weekColumn: {
-    gap: 2,
-  },
-  activitySquare: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-  },
-  heatmapLegend: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.xs,
-  },
-  legendText: {
-    fontSize: TYPOGRAPHY.xs,
-    color: colors.textSecondary,
-  },
-  legendSquares: {
-    flexDirection: 'row',
-    gap: 2,
-  },
-  legendSquare: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
+  habitSquare: {
+    width: 11.6, // Slightly bigger squares
+    height: 11.6, // Slightly bigger squares
+    borderRadius: 2, // Slightly bigger border radius
   },
   statsGrid: {
     flexDirection: 'row',

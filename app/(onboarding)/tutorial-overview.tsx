@@ -20,7 +20,7 @@ export default function TutorialOverviewScreen() {
 
   const handleTutorial = async () => {
     await updateOnboardingProgress({ currentStep: 5 })
-    router.push('/(onboarding)/tutorial-input')
+    router.push('/(tabs)')
   }
 
   return (
