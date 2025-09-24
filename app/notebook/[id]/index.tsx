@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   View,
   Text,
@@ -9,11 +9,11 @@ import {
   Alert,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useRouter, useLocalSearchParams } from 'expo-router'
-import { mockDataService } from '@/lib/services/mockData'
-import { NotebookWithStats, WordWithReviews } from '@/lib/types/goldlist'
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router'
+import { supabaseService } from '@/lib/services/supabaseService'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS, FLAG_EMOJIS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { SharedHeader } from '@/components/shared-header'
 import { BottomNav } from '@/components/bottom-nav'
 
@@ -25,130 +25,308 @@ interface PageData {
   round: number
   status: 'locked' | 'available' | 'in_progress' | 'completed' | 'perfect'
   wordsCount: number
+  actualWordsCount: number
   completedWords: number
   type: 'lesson' | 'review' | 'checkpoint' | 'story'
+  isUnlocked: boolean
+  unlockDate: string | null
+  nextReviewDate?: string | null
+  daysUntilNextReview?: number
+  allWordsMastered?: boolean
 }
 
 export default function NotebookDetailsScreen() {
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
   const { colors } = useTheme()
-  const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
-  const [words, setWords] = useState<WordWithReviews[]>([])
+  const { getCurrentDate } = useDevTime()
+  const [notebook, setNotebook] = useState<any>(null)
+  const [pages, setPages] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedPage, setSelectedPage] = useState<PageData | null>(null)
 
   useEffect(() => {
     loadNotebookData()
-  }, [id])
+  }, [id]) // Only reload when notebook ID changes
+
+  // Refresh data when screen comes into focus (e.g., returning from review)
+  useFocusEffect(
+    React.useCallback(() => {
+      loadNotebookData()
+    }, [id])
+  )
 
   const loadNotebookData = async () => {
     if (!id) return
     
     try {
-      const notebookData = await mockDataService.getNotebook(id)
-      const wordsData = await mockDataService.getWordsForNotebook(id)
+      // Load notebook and all 200 page circles (existing + virtual)
+      const [notebookData, pagesData] = await Promise.all([
+        supabaseService.getNotebook(id),
+        supabaseService.getPages(id) // This now returns 200 pages: real + virtual
+      ])
       
       setNotebook(notebookData)
-      setWords(wordsData)
+      setPages(pagesData) // Pages already include unlock status and virtual pages
     } catch (error) {
       Alert.alert('Error', 'Failed to load notebook data')
+      console.error('Error loading notebook data:', error)
     } finally {
       setLoading(false)
     }
   }
 
+  // Helper function to check if page has words ready for review (14+ days old)
+  const hasWordsReadyForReview = (page: any): boolean => {
+    if (!page.words || page.words.length === 0) return false
+    
+    const currentDateTime = getCurrentDate()
+    const currentDate = new Date(currentDateTime)
+    currentDate.setHours(0, 0, 0, 0)
+    
+    const hasReviews = page.words.some((word: any) => {
+      if (word.is_mastered) return false
+      
+      // Check if word was already reviewed today (prevent same-day re-reviews)
+      if (word.last_reviewed) {
+        const lastReviewedDate = new Date(word.last_reviewed)
+        lastReviewedDate.setHours(0, 0, 0, 0)
+        
+        // If already reviewed today, word is not available for review
+        if (currentDate.getTime() === lastReviewedDate.getTime()) {
+          return false
+        }
+      }
+      
+      // Check if word has a review_date and if it's due
+      if (word.review_date) {
+        const reviewDate = new Date(word.review_date)
+        reviewDate.setHours(0, 0, 0, 0)
+        const isReviewDue = currentDate >= reviewDate
+        
+        // Debug log for page 1 words (reduced logging)
+        if (page.page_number === 1 && Math.random() < 0.1) {
+          console.log(`🔍 Review Debug Page 1 - Word: "${word.word}"`)
+          console.log(`   Current time: ${currentDateTime.toISOString()}`)
+          console.log(`   Review date: ${word.review_date}`)
+          console.log(`   Last reviewed: ${word.last_reviewed}`)
+          console.log(`   Is review due: ${isReviewDue}`)
+          console.log(`   Current round: ${word.current_round}`)
+        }
+        
+        return isReviewDue
+      } else {
+        // Fallback to creation date logic for words without review_date
+        const wordCreated = new Date(word.created_at)
+        wordCreated.setHours(0, 0, 0, 0)
+        
+        const daysSinceCreated = Math.floor(
+          (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
+        )
+        
+        // Debug log for page 1 words (reduced logging)
+        if (page.page_number === 1 && Math.random() < 0.1) {
+          console.log(`🔍 Review Debug Page 1 - Word: "${word.word}" (fallback)`)
+          console.log(`   Current time: ${currentDateTime.toISOString()}`)
+          console.log(`   Word created: ${wordCreated.toISOString()}`)
+          console.log(`   Last reviewed: ${word.last_reviewed}`)
+          console.log(`   Days since created: ${daysSinceCreated}`)
+          console.log(`   Ready for review: ${daysSinceCreated > 14}`)
+        }
+        
+        return daysSinceCreated > 14
+      }
+    })
+    
+    // Debug for page 1 (reduced logging)
+    if (page.page_number === 1 && Math.random() < 0.1) {
+      console.log(`📋 Page 1 has reviewable words: ${hasReviews}`)
+    }
+    
+    return hasReviews
+  }
+
   const generatePathData = (): PageData[] => {
-    if (!notebook || !words.length) return []
+    if (!notebook || !pages.length) return []
 
-    const pages: PageData[] = []
-    const wordsPerPage = 20
-    const totalPages = Math.ceil(words.length / wordsPerPage) || 5 // Default 5 pages for demo
+    const pathData: PageData[] = []
 
-    for (let i = 0; i < totalPages; i++) {
-      const pageWords = words.slice(i * wordsPerPage, (i + 1) * wordsPerPage)
-      const completedWords = pageWords.filter(w => w.status === 'mastered').length
+    for (const page of pages) {
+      // Debug page 1 specifically (reduced logging)
+      if (page.page_number === 1 && Math.random() < 0.1) { // Only log 10% of the time to reduce spam
+        console.log(`🔍 Page 1 Debug:`)
+        console.log(`   Words array length: ${page.words?.length || 0}`)
+        console.log(`   Words:`, page.words?.map((w: any) => ({ word: w.word, created_at: w.created_at, status: w.status })) || [])
+      }
+      
+      const completedWords = page.words?.filter((w: any) => w.is_mastered).length || 0
+      const totalWords = page.words?.length || 0
+      const hasReviewableWords = hasWordsReadyForReview(page)
+      
+      // Calculate the highest round of words in this page for color display
+      const maxWordRound = page.words?.reduce((max: any, word: any) => {
+        return Math.max(max, word.current_round || 1)
+      }, 1) || 1
+      
+      // Debug log for page color changes (reduced logging)
+      if (page.page_number === 1 && page.words?.length > 0 && Math.random() < 0.1) {
+        console.log(`🎨 Page 1 Color Debug:`)
+        console.log(`   Words rounds:`, page.words?.map((w: any) => ({ word: w.word, round: w.current_round })))
+        console.log(`   Max word round: ${maxWordRound}`)
+        console.log(`   Page will be colored for round: ${maxWordRound}`)
+      }
       
       let status: PageData['status'] = 'locked'
       let type: PageData['type'] = 'lesson'
 
-      // First page is always available
-      if (i === 0) {
-        status = completedWords === pageWords.length ? 'perfect' : 
-                 completedWords > 0 ? 'in_progress' : 'available'
-      } 
-      // Unlock pages 2, 4, 5 for demo (page numbers 2, 4, 5 = indices 1, 3, 4)
-      else if (i === 1 || i === 3 || i === 4) {
-        status = completedWords === pageWords.length ? 'perfect' : 
-                 completedWords > 0 ? 'in_progress' : 'available'
-      } 
-      else {
-        const prevPage = pages[i - 1]
-        if (prevPage.status === 'completed' || prevPage.status === 'perfect') {
-          status = completedWords === pageWords.length ? 'perfect' : 
-                   completedWords > 0 ? 'in_progress' : 'available'
+      // Determine status based on unlock status and completion
+      if (page.is_unlocked) {
+        if (page.is_completed) {
+          status = completedWords === totalWords && totalWords > 0 ? 'perfect' : 'completed'
+        } else if (totalWords > 0) {
+          status = 'in_progress'
+        } else {
+          status = 'available'
+        }
+      } else {
+        status = 'locked'
+      }
+
+      // Check if this page was reviewed today and calculate next review info
+      const currentDate = new Date(getCurrentDate())
+      currentDate.setHours(0, 0, 0, 0)
+      
+      const hasWordsReviewedToday = totalWords > 0 && page.words?.some((word: any) => {
+        if (!word.last_reviewed) return false
+        const lastReviewedDate = new Date(word.last_reviewed)
+        lastReviewedDate.setHours(0, 0, 0, 0)
+        const wasReviewedToday = currentDate.getTime() === lastReviewedDate.getTime()
+        
+        // Debug log for page 1 
+        if (page.page_number === 1 && wasReviewedToday) {
+          console.log(`🔍 Page 1 Review Detection:`)
+          console.log(`   Word: "${word.word}" was reviewed today`)
+          console.log(`   Current date: ${currentDate.toISOString()}`)
+          console.log(`   Last reviewed: ${word.last_reviewed}`)
+          console.log(`   Last reviewed date obj: ${lastReviewedDate.toISOString()}`)
+        }
+        
+        return wasReviewedToday
+      })
+
+      // Calculate next review information for pages reviewed today
+      let nextReviewDate: string | null = null
+      let daysUntilNextReview = 0
+      let allWordsMastered = false
+
+      if (hasWordsReviewedToday) {
+        // Find earliest review date among non-mastered words
+        const upcomingReviewDates = page.words
+          ?.filter((word: any) => !word.is_mastered && word.review_date)
+          .map((word: any) => word.review_date)
+          .sort()
+
+        if (upcomingReviewDates && upcomingReviewDates.length > 0) {
+          nextReviewDate = upcomingReviewDates[0]
+          const nextReviewDateObj = new Date(nextReviewDate)
+          nextReviewDateObj.setHours(0, 0, 0, 0)
+          daysUntilNextReview = Math.ceil((nextReviewDateObj.getTime() - currentDate.getTime()) / (24 * 60 * 60 * 1000))
+        } else {
+          // All words are mastered
+          allWordsMastered = true
         }
       }
 
-      // Every 5th page is a checkpoint
-      if ((i + 1) % 5 === 0) {
-        type = 'checkpoint'
-      }
-      // Every 10th page could be a story/special lesson
-      else if ((i + 1) % 10 === 0) {
-        type = 'story'
-      }
-      // Review pages for higher rounds
-      else if (i > 0 && Math.random() > 0.7) {
+      // Determine type - prioritize reviewed today status over reviewable words
+      if (hasWordsReviewedToday) {
+        type = 'lesson' // Show as completed lesson for today
+        status = 'completed' // Mark as completed to indicate it's been reviewed today
+        
+        // Debug log for page 1
+        if (page.page_number === 1) {
+          console.log(`📋 Page 1 Final State: type='lesson', status='completed' (reviewed today)`)
+        }
+      } else if (hasReviewableWords) {
         type = 'review'
+        
+        // Debug log for page 1
+        if (page.page_number === 1) {
+          console.log(`📋 Page 1 Final State: type='review' (has reviewable words)`)
+        }
+      } else if (page.page_number % 20 === 0) {
+        type = 'checkpoint'
+      } else if (page.page_number % 10 === 0) {
+        type = 'story'
+      } else {
+        type = 'lesson'
       }
 
-      pages.push({
-        id: `page-${i}`,
-        pageNumber: i + 1,
-        round: Math.min(Math.floor(i / 5) + 1, 4), // Round 1-4
+      pathData.push({
+        id: page.id,
+        pageNumber: page.page_number,
+        round: maxWordRound,
         status,
-        wordsCount: pageWords.length || wordsPerPage,
+        wordsCount: notebook.words_per_day || 20,
+        actualWordsCount: totalWords,
         completedWords,
-        type
+        type,
+        isUnlocked: page.is_unlocked || false,
+        unlockDate: page.unlock_date,
+        nextReviewDate,
+        daysUntilNextReview,
+        allWordsMastered
       })
     }
 
-    return pages
+    return pathData.sort((a, b) => a.pageNumber - b.pageNumber)
   }
 
-  const pathData = generatePathData()
+  const pathData = useMemo(() => generatePathData(), [notebook, pages, getCurrentDate()])
 
   // Create styles before any early returns
   const styles = createStyles(colors)
 
-  const getPageIcon = (page: PageData) => {
-    switch (page.type) {
-      case 'checkpoint':
-        return '🎯'
-      case 'story':
-        return '📚'
-      case 'review':
-        return '🔄' // Modern refresh icon for review
-      default:
-        return page.status === 'perfect' ? '⭐' : 
-               page.status === 'completed' ? '✅' : 
-               page.status === 'in_progress' ? '🎮' : '📝' // Game controller for progress, pencil for new
-    }
-  }
 
   const getPageColor = (page: PageData) => {
+    // If locked, always show gray
     if (page.status === 'locked') return colors.gray300
-    if (page.status === 'perfect') return colors.success
-    if (page.status === 'completed') return colors.primary
-    if (page.status === 'in_progress') return colors.warning
-    return colors.primary
+    
+    // Use Gold List Method round colors
+    switch (page.round) {
+      case 1: return '#EF4444' // Red - Round 1
+      case 2: return '#10B981' // Green - Round 2  
+      case 3: return '#3B82F6' // Blue - Round 3
+      case 4: return '#F59E0B' // Yellow - Round 4
+      default: return colors.primary // Fallback
+    }
   }
 
   const handlePagePress = (page: PageData) => {
     if (page.status === 'locked') {
-      Alert.alert('Locked', 'Complete the previous lessons to unlock this page')
+      const unlockDate = page.unlockDate ? new Date(page.unlockDate).toLocaleDateString() : 'Unknown'
+      Alert.alert('Locked', `This page will unlock on ${unlockDate}. Use the simulation buttons to advance days!`)
       return
+    }
+
+    // Check if page was already reviewed today
+    if (page.status === 'completed' && page.type === 'lesson') {
+      Alert.alert('Already Reviewed', 'This page has been reviewed today. Come back tomorrow for the next review!')
+      return
+    }
+
+    // Check if this is a virtual page (not created yet)
+    if (page.id.startsWith('virtual-')) {
+      // Virtual pages should still be selectable if unlocked (for current day)
+      const today = getCurrentDate()
+      const notebookCreated = notebook ? new Date(notebook.created_at) : today
+      const daysSinceCreation = Math.floor(
+        (today.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
+      ) + 1
+      
+      if (page.pageNumber > daysSinceCreation) {
+        Alert.alert('Not Ready Yet', `This page will be available on day ${page.pageNumber}. Use simulation buttons to advance time!`)
+        return
+      }
     }
 
     // Toggle: if same page is already selected, close it; otherwise open new one
@@ -160,10 +338,17 @@ export default function NotebookDetailsScreen() {
   }
 
   const handleActionPress = (page: PageData) => {
-    if (page.type === 'review') {
-      router.push(`/notebook/${id}/review?round=${page.round}`)
-    } else {
+    // Check if this is a virtual page and handle accordingly
+    if (page.id.startsWith('virtual-')) {
+      // For virtual pages, redirect to input to create the actual page
       router.push(`/notebook/${id}/input?page=${page.pageNumber}`)
+    } else {
+      // For real pages, check type
+      if (page.type === 'review') {
+        router.push(`/notebook/${id}/review?page=${page.pageNumber}`)
+      } else {
+        router.push(`/notebook/${id}/input?page=${page.pageNumber}`)
+      }
     }
     setSelectedPage(null)
   }
@@ -252,18 +437,52 @@ export default function NotebookDetailsScreen() {
               </Text>
               <Text style={styles.speechBubbleDescription}>
                 {page.type === 'review' ? 
-                  `Review words from Round ${page.round}` :
+                  `Words ready for review today` :
+                  page.allWordsMastered ?
+                  `All words mastered! 🎉` :
+                  page.daysUntilNextReview && page.daysUntilNextReview > 0 ?
+                  `Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` :
+                  page.status === 'completed' && page.type === 'lesson' ?
+                  `Reviewed today! Next review tomorrow` :
+                  page.completedWords > 0 || page.actualWordsCount > 0 ?
+                  `Page has words - next review coming soon` :
                   `Add ${page.wordsCount} new words`
                 }
               </Text>
-              <TouchableOpacity 
-                style={styles.actionButton}
-                onPress={() => handleActionPress(page)}
-              >
-                <Text style={styles.actionButtonText}>
-                  {page.type === 'review' ? 'Start Review' : 'Add Words'}
-                </Text>
-              </TouchableOpacity>
+              {page.allWordsMastered ? (
+                <View style={[styles.actionButton, { backgroundColor: colors.primary, opacity: 0.7 }]}>
+                  <Text style={[styles.actionButtonText, { color: colors.cardBackground }]}>
+                    ✅ All Mastered
+                  </Text>
+                </View>
+              ) : page.daysUntilNextReview && page.daysUntilNextReview > 0 ? (
+                <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                  <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                    Next Review Day {page.daysUntilNextReview > 1 ? page.daysUntilNextReview : 'Tomorrow'}
+                  </Text>
+                </View>
+              ) : page.status === 'completed' && page.type === 'lesson' ? (
+                <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                  <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                    Already Reviewed
+                  </Text>
+                </View>
+              ) : (page.completedWords > 0 || page.actualWordsCount > 0) && page.type !== 'review' ? (
+                <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                  <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                    Page Locked
+                  </Text>
+                </View>
+              ) : (
+                <TouchableOpacity 
+                  style={styles.actionButton}
+                  onPress={() => handleActionPress(page)}
+                >
+                  <Text style={styles.actionButtonText}>
+                    {page.type === 'review' ? 'Review Now' : 'Add Words'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
             <View style={[
               styles.speechBubbleArrow,

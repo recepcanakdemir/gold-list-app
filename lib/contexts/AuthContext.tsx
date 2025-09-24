@@ -14,6 +14,7 @@ interface AuthContextType {
   signOut: () => Promise<void>
   signInWithGoogle: () => Promise<void>
   signInWithApple: () => Promise<void>
+  refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -83,6 +84,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setProfile(userProfile)
     } catch (error) {
       console.error('Error loading profile:', error)
+    }
+  }
+
+  // Function to refresh profile data
+  async function refreshProfile() {
+    if (session?.user?.id) {
+      await loadProfile(session.user.id)
     }
   }
 
@@ -166,6 +174,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signOut,
     signInWithGoogle,
     signInWithApple,
+    refreshProfile,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

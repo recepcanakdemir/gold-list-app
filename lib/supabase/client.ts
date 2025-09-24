@@ -16,3 +16,9 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
 // Helper functions for common operations
 export const auth = supabase.auth
 export const storage = supabase.storage
+
+// Export types for easier use
+export type { Database } from '../types/database'
+export type Tables<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row']
+export type Insert<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Insert']
+export type Update<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Update']

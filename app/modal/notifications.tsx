@@ -5,8 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  SafeAreaView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'

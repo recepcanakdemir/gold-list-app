@@ -11,11 +11,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { PanGestureHandler, State } from 'react-native-gesture-handler'
 import { useRouter, useLocalSearchParams } from 'expo-router'
-import { mockDataService } from '@/lib/services/mockData'
-import { WordWithReviews, NotebookWithStats } from '@/lib/types/goldlist'
+import { supabaseService } from '@/lib/services/supabaseService'
 import { ROUND_COLORS } from '@/lib/types/goldlist'
+
+// Type aliases for cleaner code
+type WordWithReviews = any // Using any for now to avoid type conflicts
+type NotebookWithStats = any
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import * as Haptics from 'expo-haptics'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
@@ -23,8 +27,9 @@ const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.2 // More responsive - 20% of screen wi
 
 export default function ReviewScreen() {
   const router = useRouter()
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, round, page } = useLocalSearchParams<{ id: string; round?: string; page?: string }>()
   const { colors } = useTheme()
+  const { getCurrentDate } = useDevTime()
   
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [words, setWords] = useState<WordWithReviews[]>([])
@@ -38,6 +43,13 @@ export default function ReviewScreen() {
   }>({ remembered: 0, forgotten: 0, total: 0 })
   const [sessionStartTime] = useState(Date.now())
   const [loading, setLoading] = useState(true)
+  
+  // Batch review collection for performance optimization
+  const [batchReviews, setBatchReviews] = useState<Array<{ wordId: string; remembered: boolean }>>([])
+  const [isProcessingBatch, setIsProcessingBatch] = useState(false)
+  const batchReviewsRef = useRef<Array<{ wordId: string; remembered: boolean }>>([])
+  
+  // Note: batchReviewsRef is manually kept in sync with batchReviews state
 
   // Animation values for card deck - each card has independent animations
   const currentCardTranslateX = useRef(new Animated.Value(0)).current
@@ -63,9 +75,25 @@ export default function ReviewScreen() {
     return colorsMap
   }, [words])
 
+  // Memoize styles to prevent recreation on every render
+  const styles = useMemo(() => createStyles(colors), [colors])
+
   useEffect(() => {
     loadReviewData()
-  }, [id])
+  }, [id, round, page])
+
+  // Process pending batch reviews when component unmounts
+  useEffect(() => {
+    return () => {
+      // Cleanup function - only process if there are pending reviews from early exit
+      if (batchReviewsRef.current.length > 0) {
+        console.log(`🧹 Cleanup: Processing ${batchReviewsRef.current.length} pending reviews from early exit...`)
+        supabaseService.processBatchWordReviews(batchReviewsRef.current).catch(error => {
+          console.error('Failed to process batch reviews on cleanup:', error)
+        })
+      }
+    }
+  }, [words]) // Include words in dependency to capture latest word list
   
   // Initialize visual refs
   useEffect(() => {
@@ -84,58 +112,97 @@ export default function ReviewScreen() {
 
   const loadReviewData = async () => {
     try {
-      const [notebookData, wordsData] = await Promise.all([
-        mockDataService.getNotebook(id!),
-        mockDataService.getWordsForReview(id!)
-      ])
+      // Check if we're in unified review mode (page parameter is null or 'unified')
+      const isUnifiedReview = !page || page === 'unified'
+      
+      let notebookData, loadedWords
+      
+      if (isUnifiedReview) {
+        // Unified review mode - get all words due for review today
+        console.log('📚 Loading unified review session with all words due today')
+        const results = await Promise.all([
+          supabaseService.getNotebook(id!), // Still need notebook for basic info
+          supabaseService.getAllWordsForReviewToday()
+        ])
+        
+        notebookData = results[0]
+        loadedWords = results[1]
+        
+        console.log(`🎯 Unified review loaded: ${loadedWords.length} words from ${new Set(loadedWords.map(w => (w.page as any).page_number)).size} pages`)
+      } else {
+        // Traditional page-specific review mode
+        const options: { round?: number; pageNumber?: number } = {}
+        
+        // Add filters based on URL parameters
+        if (round) options.round = parseInt(round)
+        if (page) options.pageNumber = parseInt(page)
+        
+        const results = await Promise.all([
+          supabaseService.getNotebook(id!),
+          supabaseService.getWordsForReview(id!)
+        ])
+        
+        notebookData = results[0]
+        loadedWords = results[1]
+      }
       
       setNotebook(notebookData)
-      setWords(wordsData)
+      setWords(loadedWords)
       
-      if (wordsData.length === 0) {
+      // Check if any words were loaded
+      if (loadedWords.length === 0) {
         Alert.alert(
           'No Reviews Due',
           'Great job! You don\'t have any words ready for review.',
-          [{ text: 'OK', onPress: () => router.back() }]
+          [{ text: 'OK', onPress: () => {
+            if (router.canGoBack()) {
+              router.back()
+            } else {
+              router.push('/')
+            }
+          } }]
         )
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to load review words')
-      router.back()
+      if (router.canGoBack()) {
+        router.back()
+      } else {
+        router.push('/(tabs)/')
+      }
     } finally {
       setLoading(false)
     }
   }
 
-  const handleGesture = (event: any) => {
+  // Use ref to throttle gesture updates for better performance
+  const lastGestureUpdate = useRef(0)
+  
+  const handleGesture = useCallback((event: any) => {
     const { translationX } = event.nativeEvent
     
-    // Current card animations
-    currentCardTranslateX.setValue(translationX)
+    // Throttle updates to ~60fps for better performance
+    const now = Date.now()
+    if (now - lastGestureUpdate.current < 16) return // ~60fps throttling
+    lastGestureUpdate.current = now
     
-    // 30 degree rotation based on swipe direction (like Tinder)
-    const maxRotation = 30 // degrees
-    const rotationValue = (translationX / SCREEN_WIDTH) * maxRotation
-    currentCardRotate.setValue(rotationValue)
-    
-    // Subtle scale effect based on distance from center
+    // Pre-calculate all values to avoid repeated computations
     const progress = Math.abs(translationX) / SCREEN_WIDTH
+    const rotationValue = (translationX / SCREEN_WIDTH) * 30 // 30 degree max rotation
     const scaleValue = 1 - progress * 0.05 // Very subtle scale (0.95 minimum)
-    currentCardScale.setValue(scaleValue)
-    
-    // Fade effect based on swipe distance
     const opacityValue = 1 - progress * 0.3 // Fade to 0.7 minimum
+    
+    // Batch current card animations
+    currentCardTranslateX.setValue(translationX)
+    currentCardRotate.setValue(rotationValue)
+    currentCardScale.setValue(scaleValue)
     currentCardOpacity.setValue(opacityValue)
     
-    // Next card reveal animations - as current card moves, next card scales up
-    const nextCardScaleValue = 0.95 + (progress * 0.05) // Scale from 0.95 to 1.0
-    const nextCardOpacityValue = 0.8 + (progress * 0.2) // Opacity from 0.8 to 1.0
-    const nextCardTranslateYValue = 10 - (progress * 10) // Move up from 10px to 0px
-    
-    nextCardScale.setValue(nextCardScaleValue)
-    nextCardOpacity.setValue(nextCardOpacityValue)
-    nextCardTranslateY.setValue(nextCardTranslateYValue)
-  }
+    // Batch next card animations
+    nextCardScale.setValue(0.95 + (progress * 0.05))
+    nextCardOpacity.setValue(0.8 + (progress * 0.2))
+    nextCardTranslateY.setValue(10 - (progress * 10))
+  }, [])
 
   const handleGestureEnd = (event: any) => {
     const { translationX, velocityX } = event.nativeEvent
@@ -264,16 +331,25 @@ export default function ReviewScreen() {
 
     // Complete transition immediately when animation starts
     // This prevents the "refresh effect" by updating state before the animation delay
-    completeCardTransition(remembered)
+    // Make sure this completes synchronously for the critical ref update
+    await completeCardTransition(remembered)
   }
 
   const completeCardTransition = async (remembered: boolean) => {
     const currentWord = words[visualCurrentIndex.current]
     
     try {
-      await mockDataService.processWordReview(currentWord.id, remembered)
+      // Add to batch reviews for optimized processing
+      const newBatchReviews = [...batchReviews, { wordId: currentWord.id, remembered }]
+      setBatchReviews(newBatchReviews)
+      batchReviewsRef.current = newBatchReviews
       
-      // Update refs immediately (no re-render)
+      console.log(`📝 Added review for word "${currentWord.word}": ${remembered ? 'remembered' : 'forgotten'}`)
+      console.log(`📊 Batch now contains ${newBatchReviews.length} reviews:`, newBatchReviews.map(r => r.wordId))
+      
+      // Note: Only using batch processing to avoid duplicate processing
+      
+      // Update refs immediately for UI feedback (optimistic update)
       visualStats.current = {
         remembered: visualStats.current.remembered + (remembered ? 1 : 0),
         forgotten: visualStats.current.forgotten + (remembered ? 0 : 1),
@@ -300,14 +376,11 @@ export default function ReviewScreen() {
         completeReviewSession()
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to process review')
+      console.error('Review processing error:', error)
+      Alert.alert('Error', `Failed to process review: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 
-  const processReview = async (remembered: boolean) => {
-    // Kept for compatibility, redirects to new function
-    await completeCardTransition(remembered)
-  }
 
   const resetAnimationsForNewCard = () => {
     // Reset animations immediately without triggering re-renders
@@ -330,13 +403,43 @@ export default function ReviewScreen() {
     resetAnimationsForNewCard()
   }
 
-  const completeReviewSession = () => {
+  const completeReviewSession = async () => {
+    console.log(`🏁 CompleteReviewSession called - batchReviews.length: ${batchReviews.length}`)
+    console.log(`🏁 batchReviewsRef.current.length: ${batchReviewsRef.current.length}`)
+    console.log(`🏁 Current batch contents:`, batchReviews.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
+    
+    // Process batch reviews before showing completion dialog
+    // Use the ref version which should be most up-to-date
+    const reviewsToProcess = batchReviewsRef.current.length > 0 ? batchReviewsRef.current : batchReviews
+    
+    if (reviewsToProcess.length > 0) {
+      setIsProcessingBatch(true)
+      try {
+        console.log(`🚀 Processing batch of ${reviewsToProcess.length} reviews...`)
+        console.log(`🚀 Reviews to process:`, reviewsToProcess.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
+        await supabaseService.processBatchWordReviews(reviewsToProcess)
+        console.log('✅ Batch processing completed successfully')
+        setBatchReviews([]) // Clear the batch after successful processing
+        batchReviewsRef.current = []
+      } catch (error) {
+        console.error('❌ Batch processing failed:', error)
+        Alert.alert('Error', `Failed to save review results: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        return // Don't show completion dialog if batch processing failed
+      } finally {
+        setIsProcessingBatch(false)
+      }
+    } else {
+      console.log('⚠️ No batch reviews to process - all words may have been processed individually')
+    }
+
     const sessionDuration = Math.round((Date.now() - sessionStartTime) / 1000 / 60) // minutes
-    const accuracy = Math.round((reviewedWords.remembered / reviewedWords.total) * 100)
+    // Use visualStats.current for accurate counts (state might not be updated yet)
+    const finalStats = visualStats.current
+    const accuracy = Math.round((finalStats.remembered / finalStats.total) * 100)
     
     Alert.alert(
       'Review Complete! 🎉',
-      `Great work! You reviewed ${reviewedWords.total} words in ${sessionDuration} minutes.\n\nAccuracy: ${accuracy}%\nRemembered: ${reviewedWords.remembered}\nNeed more practice: ${reviewedWords.forgotten}`,
+      `Great work! You reviewed ${finalStats.total} words in ${sessionDuration} minutes.\n\nAccuracy: ${accuracy}%\nRemembered: ${finalStats.remembered}\nNeed more practice: ${finalStats.forgotten}`,
       [
         {
           text: 'Review More',
@@ -345,12 +448,30 @@ export default function ReviewScreen() {
             setCurrentIndex(0)
             setShowMeaning(false)
             setReviewedWords({ remembered: 0, forgotten: 0, total: 0 })
+            setBatchReviews([]) // Clear batch reviews for new session
+            batchReviewsRef.current = []
+            visualCurrentIndex.current = 0
+            visualStats.current = { remembered: 0, forgotten: 0, total: 0 }
             resetAnimations()
           }
         },
         {
           text: 'Done',
-          onPress: () => router.back(),
+          onPress: () => {
+            // Navigate back with a flag indicating reviews were completed
+            if (router.canGoBack()) {
+              router.back()
+            } else {
+              router.push('/')
+            }
+            
+            // Set a flag that reviews were completed for home screen to detect
+            setTimeout(() => {
+              if (typeof window !== 'undefined') {
+                (window as any).reviewsJustCompleted = true
+              }
+            }, 100)
+          },
           style: 'default'
         }
       ]
@@ -516,14 +637,11 @@ export default function ReviewScreen() {
     handleSwipe(remembered ? 'right' : 'left')
   }
 
-  // Create basic styles for early returns
-  const basicStyles = createStyles(colors)
-
   if (loading) {
     return (
-      <SafeAreaView style={basicStyles.container}>
-        <View style={basicStyles.loadingContainer}>
-          <Text style={basicStyles.loadingText}>Loading review...</Text>
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading review...</Text>
         </View>
       </SafeAreaView>
     )
@@ -531,9 +649,23 @@ export default function ReviewScreen() {
 
   if (!notebook || words.length === 0) {
     return (
-      <SafeAreaView style={basicStyles.container}>
-        <View style={basicStyles.loadingContainer}>
-          <Text style={basicStyles.loadingText}>No words to review</Text>
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>No words to review</Text>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  // Show batch processing indicator
+  if (isProcessingBatch) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Saving your progress...</Text>
+          <Text style={[styles.loadingText, { fontSize: 14, marginTop: 8 }]}>
+            Processing {batchReviews.length} word reviews
+          </Text>
         </View>
       </SafeAreaView>
     )
@@ -543,16 +675,47 @@ export default function ReviewScreen() {
   const displayIndex = Math.max(visualCurrentIndex.current, currentIndex)
   const currentWord = words[displayIndex]
   const nextWord = words[displayIndex + 1]
+  
   const roundColors = wordColorsMap.get(currentWord?.id) || ROUND_COLORS[1]
   const nextRoundColors = wordColorsMap.get(nextWord?.id) || ROUND_COLORS[1]
-  const styles = createStyles(colors)
-  const progress = (displayIndex + 1) / words.length
+  const progress = words.length > 0 ? (displayIndex + 1) / words.length : 0
 
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => {
+          // Show confirmation if there are unreviewed words
+          const hasUnreviewedWords = currentIndex < words.length - 1
+          
+          if (hasUnreviewedWords) {
+            Alert.alert(
+              'Exit Review?',
+              `You have ${words.length - currentIndex - 1} unreviewed words remaining. These will be automatically marked as "not remembered" and moved to the next round.`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Exit',
+                  style: 'destructive',
+                  onPress: () => {
+                    if (router.canGoBack()) {
+                      router.back()
+                    } else {
+                      router.push('/')
+                    }
+                  }
+                }
+              ]
+            )
+          } else {
+            // No unreviewed words, safe to exit
+            if (router.canGoBack()) {
+              router.back()
+            } else {
+              router.push('/')
+            }
+          }
+        }}>
           <Text style={styles.closeButton}>×</Text>
         </TouchableOpacity>
         
@@ -603,13 +766,24 @@ export default function ReviewScreen() {
         )}
 
         {/* Current card (top) - Fully interactive */}
-        {currentWord && (
+        {currentWord ? (
           <CurrentCard 
             key={`current-${currentWord.id}`}
             word={currentWord} 
             roundColors={roundColors} 
             showMeaning={showMeaning} 
           />
+        ) : (
+          <View style={[styles.card, styles.currentCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+            <View style={styles.cardContent}>
+              <Text style={[styles.cardWord, { color: colors.textPrimary }]}>
+                {words.length === 0 ? 'No words available for review' : 'Loading word...'}
+              </Text>
+              <Text style={[styles.cardNotes, { color: colors.textSecondary }]}>
+                Debug: {words.length} words total, index {displayIndex}
+              </Text>
+            </View>
+          </View>
         )}
       </View>
 

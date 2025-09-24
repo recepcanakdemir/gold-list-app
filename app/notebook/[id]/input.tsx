@@ -5,17 +5,19 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router'
-import { mockDataService } from '@/lib/services/mockData'
+import { supabaseService } from '@/lib/services/supabaseService'
+import { useApp } from '@/lib/contexts/AppContext'
 import { NotebookWithStats } from '@/lib/types/goldlist'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
 
 interface WordEntry {
   word: string
@@ -25,8 +27,10 @@ interface WordEntry {
 
 export default function WordInputScreen() {
   const router = useRouter()
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, page: pageParam } = useLocalSearchParams<{ id: string; page?: string }>()
   const { colors } = useTheme()
+  const { refreshNotebooks } = useApp()
+  const { currentSimulatedDay } = useDevTime()
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [mode, setMode] = useState<'focus' | 'fullpage'>('focus')
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -36,16 +40,59 @@ export default function WordInputScreen() {
 
   useEffect(() => {
     loadNotebook()
-    initializeWords()
+    checkPageStatus()
   }, [id])
 
   const loadNotebook = async () => {
     try {
-      const notebookData = await mockDataService.getNotebook(id!)
+      const notebookData = await supabaseService.getNotebook(id!)
       setNotebook(notebookData)
     } catch (error) {
       Alert.alert('Error', 'Failed to load notebook')
-      router.back()
+      if (router.canGoBack()) {
+        router.back()
+      } else {
+        router.push('/(tabs)/')
+      }
+    }
+  }
+
+  const checkPageStatus = async () => {
+    try {
+      const pageNumber = pageParam ? parseInt(pageParam) : 1
+      
+      // Check if this page already has words
+      const pages = await supabaseService.getPages(id!)
+      const currentPage = pages.find(p => p.page_number === pageNumber)
+      
+      if (currentPage && currentPage.words && currentPage.words.length > 0) {
+        // Page already has words - redirect to review or show locked message
+        Alert.alert(
+          'Page Already Has Words',
+          'This page already contains words and cannot accept new word additions. Pages can only have words added once, then they move through review rounds.',
+          [
+            {
+              text: 'Go to Reviews',
+              onPress: () => {
+                router.replace(`/notebook/${id}/review?page=${pageNumber}`)
+              }
+            },
+            {
+              text: 'Back to Notebook',
+              onPress: () => {
+                router.back()
+              }
+            }
+          ]
+        )
+        return
+      }
+      
+      // Page is available for word input
+      initializeWords()
+    } catch (error) {
+      console.error('Error checking page status:', error)
+      initializeWords() // Fallback to normal initialization
     }
   }
 
@@ -65,7 +112,12 @@ export default function WordInputScreen() {
   }
 
   const addNewWord = () => {
-    setWords([...words, { word: '', meaning: '', notes: '' }])
+    const maxWords = notebook?.words_per_day || 20
+    if (words.length < maxWords) {
+      setWords([...words, { word: '', meaning: '', notes: '' }])
+    } else {
+      Alert.alert('Word Limit Reached', `You can only add ${maxWords} words per day according to your notebook settings.`)
+    }
   }
 
   const removeWord = (index: number) => {
@@ -103,19 +155,42 @@ export default function WordInputScreen() {
 
     setLoading(true)
     try {
-      // Create a new page first
-      const newPage = await mockDataService.createPage(id!)
+      // Get or create today's page
+      const currentPage = await supabaseService.getTodaysPage(id!, currentSimulatedDay)
+      if (!currentPage) {
+        Alert.alert('Error', 'Unable to create or access today\'s page.')
+        setLoading(false)
+        return
+      }
+
+      // Check word limit for the page
+      const currentWordsOnPage = currentPage.words?.length || 0
+      const maxWordsPerDay = notebook?.words_per_day || 20
+      const availableSlots = maxWordsPerDay - currentWordsOnPage
+
+      if (filledWords.length > availableSlots) {
+        Alert.alert(
+          'Word Limit Exceeded', 
+          `This page can only hold ${availableSlots} more words (${currentWordsOnPage}/${maxWordsPerDay} already added). Please remove ${filledWords.length - availableSlots} words.`
+        )
+        setLoading(false)
+        return
+      }
       
-      // Add words to the page
-      await mockDataService.addWords(
-        newPage.id,
+      // Add words to the current page
+      await supabaseService.addWords(
+        currentPage.id,
         filledWords.map((word, index) => ({
           word: word.word.trim(),
+          translation: word.meaning.trim(),
           meaning: word.meaning.trim(),
           notes: word.notes.trim() || undefined,
           position_in_page: index + 1,
         }))
       )
+
+      // Refresh the app data to update profile stats
+      await refreshNotebooks()
 
       Alert.alert(
         'Success!',
@@ -130,12 +205,27 @@ export default function WordInputScreen() {
           },
           {
             text: 'Done',
-            onPress: () => router.back(),
+            onPress: () => {
+              // Navigate back
+              if (router.canGoBack()) {
+                router.back()
+              } else {
+                router.push('/(tabs)/')
+              }
+              
+              // Set flag that words were added for home screen to detect
+              setTimeout(() => {
+                if (typeof window !== 'undefined') {
+                  (window as any).wordsJustAdded = true
+                }
+              }, 100)
+            },
             style: 'default',
           },
         ]
       )
     } catch (error) {
+      console.error('❌ Error saving words:', error)
       Alert.alert('Error', 'Failed to save words. Please try again.')
     } finally {
       setLoading(false)
@@ -166,7 +256,13 @@ export default function WordInputScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={() => {
+            if (router.canGoBack()) {
+              router.back()
+            } else {
+              router.push('/(tabs)/')
+            }
+          }}>
             <Text style={styles.cancelButton}>Cancel</Text>
           </TouchableOpacity>
           
@@ -218,6 +314,7 @@ export default function WordInputScreen() {
             onUpdateWord={updateWord}
             onAddWord={addNewWord}
             onRemoveWord={removeWord}
+            maxWords={notebook?.words_per_day || 20}
             styles={styles}
           />
         )}
@@ -321,10 +418,11 @@ interface FullPageModeProps {
   onUpdateWord: (index: number, field: keyof WordEntry, value: string) => void
   onAddWord: () => void
   onRemoveWord: (index: number) => void
+  maxWords: number
   styles: any
 }
 
-function FullPageMode({ words, onUpdateWord, onAddWord, onRemoveWord, styles }: FullPageModeProps) {
+function FullPageMode({ words, onUpdateWord, onAddWord, onRemoveWord, maxWords, styles }: FullPageModeProps) {
   return (
     <ScrollView style={styles.fullPageContainer} showsVerticalScrollIndicator={false}>
       {words.map((word, index) => (
@@ -376,9 +474,17 @@ function FullPageMode({ words, onUpdateWord, onAddWord, onRemoveWord, styles }: 
         </View>
       ))}
 
-      <TouchableOpacity style={styles.addWordButton} onPress={onAddWord}>
-        <Text style={styles.addWordButtonText}>+ Add Another Word</Text>
-      </TouchableOpacity>
+      {words.length < maxWords ? (
+        <TouchableOpacity style={styles.addWordButton} onPress={onAddWord}>
+          <Text style={styles.addWordButtonText}>+ Add Another Word ({words.length}/{maxWords})</Text>
+        </TouchableOpacity>
+      ) : (
+        <View style={[styles.addWordButton, styles.addWordButtonDisabled]}>
+          <Text style={[styles.addWordButtonText, styles.addWordButtonTextDisabled]}>
+            Word Limit Reached ({words.length}/{maxWords})
+          </Text>
+        </View>
+      )}
     </ScrollView>
   )
 }
@@ -608,6 +714,13 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.base,
     color: colors.primary,
     fontWeight: TYPOGRAPHY.medium,
+  },
+  addWordButtonDisabled: {
+    backgroundColor: colors.gray200,
+    opacity: 0.6,
+  },
+  addWordButtonTextDisabled: {
+    color: colors.textSecondary,
   },
 
   // Save Button

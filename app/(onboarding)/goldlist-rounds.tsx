@@ -4,9 +4,9 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useApp } from '@/lib/contexts/AppContext'
 import { ROUND_COLORS, NOTEBOOK_LEVEL_COLORS } from '@/lib/types/goldlist'

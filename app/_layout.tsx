@@ -6,6 +6,8 @@ import 'react-native-reanimated';
 import { AuthProvider } from '@/lib/contexts/AuthContext';
 import { AppProvider } from '@/lib/contexts/AppContext';
 import { ThemeProvider } from '@/lib/contexts/ThemeContext';
+import { DevTimeProvider } from '@/lib/contexts/DevTimeContext';
+import { DevTimeConnector } from '@/components/DevTimeConnector';
 import AuthGuard from '@/components/AuthGuard';
 
 export const unstable_settings = {
@@ -15,13 +17,15 @@ export const unstable_settings = {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
-        <AuthProvider>
-          <AppProvider>
-            <AppWithTheme />
-          </AppProvider>
-        </AuthProvider>
-      </ThemeProvider>
+      <DevTimeProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <AppProvider>
+              <AppWithTheme />
+            </AppProvider>
+          </AuthProvider>
+        </ThemeProvider>
+      </DevTimeProvider>
     </GestureHandlerRootView>
   );
 }
@@ -31,6 +35,7 @@ function AppWithTheme() {
   
   return (
     <NavigationThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
+      <DevTimeConnector />
       <AuthGuard>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
