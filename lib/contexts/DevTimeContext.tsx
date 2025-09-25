@@ -19,7 +19,7 @@ const DevTimeContext = createContext<DevTimeContextType | null>(null)
 export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   const [isSimulationActive, setIsSimulationActive] = useState(false)
   const [simulationStartTime, setSimulationStartTime] = useState(new Date())
-  const [currentSimulatedDay, setCurrentSimulatedDay] = useState(0)
+  const [currentSimulatedDay, setCurrentSimulatedDay] = useState(1)
 
   // Load simulation state on mount
   useEffect(() => {
@@ -56,8 +56,8 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     const now = new Date()
     setIsSimulationActive(true)
     setSimulationStartTime(now)
-    setCurrentSimulatedDay(0)
-    saveSimulationState(true, now, 0)
+    setCurrentSimulatedDay(1)
+    saveSimulationState(true, now, 1)
   }
 
   const stopSimulation = () => {
@@ -107,7 +107,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
 
   const previousDay = async () => {
     const oldDay = currentSimulatedDay
-    const newDay = Math.max(0, currentSimulatedDay - 1)
+    const newDay = Math.max(1, currentSimulatedDay - 1)
     setCurrentSimulatedDay(newDay)
     saveSimulationState(isSimulationActive, simulationStartTime, newDay)
     
@@ -124,7 +124,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     }
     
     const simulatedDate = new Date(simulationStartTime)
-    simulatedDate.setDate(simulatedDate.getDate() + currentSimulatedDay)
+    simulatedDate.setDate(simulatedDate.getDate() + (currentSimulatedDay - 1))
     return simulatedDate
   }
 

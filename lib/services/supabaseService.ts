@@ -2,6 +2,113 @@ import { supabase } from '@/lib/supabase/client'
 import { Database, Tables } from '@/lib/types/database'
 import { PostgrestError } from '@supabase/supabase-js'
 
+// =============================================
+// PERFORMANCE & RELIABILITY HELPERS
+// =============================================
+
+// Retry configuration for database operations
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelay: 1000, // 1 second
+  maxDelay: 10000, // 10 seconds
+  backoffMultiplier: 2
+}
+
+// Safe retry wrapper for database operations
+async function withRetry<T>(
+  operation: () => Promise<T>, 
+  operationName: string = 'database operation',
+  retries: number = RETRY_CONFIG.maxRetries
+): Promise<T> {
+  let lastError: Error | null = null
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await operation()
+      
+      // Log success if it took multiple attempts
+      if (attempt > 0) {
+        console.log(`✅ ${operationName} succeeded after ${attempt + 1} attempts`)
+      }
+      
+      return result
+    } catch (error) {
+      lastError = error as Error
+      
+      // Don't retry on the last attempt
+      if (attempt === retries) {
+        console.error(`❌ ${operationName} failed after ${retries + 1} attempts:`, error)
+        throw error
+      }
+      
+      // Calculate delay with exponential backoff
+      const delay = Math.min(
+        RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt),
+        RETRY_CONFIG.maxDelay
+      )
+      
+      console.warn(`⚠️ ${operationName} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms:`, error)
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay))
+    }
+  }
+  
+  throw lastError
+}
+
+// Simple cache for read-only data
+interface CacheEntry<T> {
+  data: T
+  timestamp: number
+  ttl: number // Time to live in milliseconds
+}
+
+class SimpleCache {
+  private cache = new Map<string, CacheEntry<any>>()
+  
+  set<T>(key: string, data: T, ttl: number = 5 * 60 * 1000): void { // Default 5 minutes
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now(),
+      ttl
+    })
+  }
+  
+  get<T>(key: string): T | null {
+    const entry = this.cache.get(key)
+    if (!entry) return null
+    
+    // Check if expired
+    if (Date.now() - entry.timestamp > entry.ttl) {
+      this.cache.delete(key)
+      return null
+    }
+    
+    return entry.data
+  }
+  
+  clear(keyPattern?: string): void {
+    if (keyPattern) {
+      // Clear keys matching pattern
+      for (const key of this.cache.keys()) {
+        if (key.includes(keyPattern)) {
+          this.cache.delete(key)
+        }
+      }
+    } else {
+      this.cache.clear()
+    }
+  }
+  
+  size(): number {
+    return this.cache.size
+  }
+}
+
+// Global cache instance
+const dataCache = new SimpleCache()
+
 // Time provider for simulation support
 let timeProvider: (() => Date) | null = null
 
@@ -154,8 +261,8 @@ class SupabaseService {
     let todaysPageNumber: number
     
     if (currentSimulatedDay !== undefined) {
-      // Use the simulation day, but pages are 1-based (simulation day 0 = page 1)
-      todaysPageNumber = currentSimulatedDay + 1
+      // Use the simulation day directly (simulation day 1 = page 1)
+      todaysPageNumber = currentSimulatedDay
     } else {
       // Fallback: calculate from notebook creation time
       const currentDateTime = getCurrentDate()
@@ -272,7 +379,20 @@ class SupabaseService {
       position_in_page: word.position_in_page,
       current_round: 1,
       is_mastered: false,
-      review_date: new Date(getCurrentDate().getTime() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      review_date: (() => {
+        const currentDate = new Date(getCurrentDate())
+        currentDate.setHours(0, 0, 0, 0)
+        const reviewDate = new Date(currentDate.getTime() + 14 * 24 * 60 * 60 * 1000)
+        
+        // Use local date formatting to avoid timezone issues
+        const year = reviewDate.getFullYear()
+        const month = String(reviewDate.getMonth() + 1).padStart(2, '0')
+        const day = String(reviewDate.getDate()).padStart(2, '0')
+        const reviewDateStr = `${year}-${month}-${day}`
+        
+        console.log(`🗓️ TIMING DEBUG - Word created on ${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}, review_date set to ${reviewDateStr} (added 14 days)`)
+        return reviewDateStr
+      })(),
       times_reviewed: 0,
       status: 'learning'
     }))
@@ -288,7 +408,17 @@ class SupabaseService {
       supabase.from('pages').update({
         words_count: words.length,
         is_completed: false,
-        next_review_date: new Date(getCurrentDate().getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
+        next_review_date: (() => {
+          const currentDate = new Date(getCurrentDate())
+          currentDate.setHours(0, 0, 0, 0)
+          const reviewDate = new Date(currentDate.getTime() + 14 * 24 * 60 * 60 * 1000)
+          
+          // Use local date formatting to avoid timezone issues
+          const year = reviewDate.getFullYear()
+          const month = String(reviewDate.getMonth() + 1).padStart(2, '0')
+          const day = String(reviewDate.getDate()).padStart(2, '0')
+          return `${year}-${month}-${day}`
+        })()
       }).eq('id', pageId),
       
       // Get current profile for stats update
@@ -349,62 +479,67 @@ class SupabaseService {
 
   // Check if there are any words due for review today across all user's notebooks
   async getAllWordsForReviewToday(): Promise<any[]> {
-    let user
-    try {
-      const { data } = await supabase.auth.getUser()
-      user = data.user
-      if (!user) return []
-    } catch (error) {
-      console.warn('Authentication check failed:', error)
-      return []
-    }
+    return withRetry(async () => {
+      let user
+      try {
+        const { data } = await supabase.auth.getUser()
+        user = data.user
+        if (!user) return []
+      } catch (error) {
+        console.warn('Authentication check failed:', error)
+        return []
+      }
 
-    const currentDateTime = getCurrentDate()
-    const currentDate = new Date(currentDateTime)
-    currentDate.setHours(0, 0, 0, 0)
-    
-    // Get ALL words from ALL pages that are due for review today
-    const { data: words, error } = await supabase
-      .from('words')
-      .select(`
-        id,
-        word,
-        translation,
-        meaning,
-        notes,
-        current_round,
-        review_date,
-        last_reviewed,
-        times_reviewed,
-        page_id,
-        page:pages!inner(
+      const currentDateTime = getCurrentDate()
+      const currentDate = new Date(currentDateTime)
+      currentDate.setHours(0, 0, 0, 0)
+      console.log(`🕰️ getAllWordsForReviewToday DEBUG - getCurrentDate(): ${currentDateTime.toISOString()}`)
+      console.log(`🕰️ getAllWordsForReviewToday DEBUG - Normalized currentDate: ${currentDate.toISOString().split('T')[0]}`)
+      
+      // Get ALL words from ALL pages that are due for review today
+      const { data: words, error } = await supabase
+        .from('words')
+        .select(`
           id,
-          page_number,
-          notebook_id,
-          notebook:notebooks!inner(user_id, title)
-        )
-      `)
-      .eq('page.notebook.user_id', user.id)
-      .eq('is_mastered', false)
-      .not('review_date', 'is', null)
+          word,
+          translation,
+          meaning,
+          notes,
+          current_round,
+          review_date,
+          last_reviewed,
+          times_reviewed,
+          page_id,
+          page:pages!inner(
+            id,
+            page_number,
+            notebook_id,
+            notebook:notebooks!inner(user_id, title)
+          )
+        `)
+        .eq('page.notebook.user_id', user.id)
+        .eq('is_mastered', false)
+        .not('review_date', 'is', null)
 
-    if (error) {
-      console.error('Error getting words for review:', error)
-      return []
-    }
+      if (error) {
+        throw new Error(`Failed to get words for review: ${error.message}`)
+      }
 
-    if (!words || words.length === 0) return []
+      if (!words || words.length === 0) return []
 
-    // Filter words that are actually due for review today
-    const reviewableWords = words.filter(word => {
-      const reviewDate = new Date(word.review_date)
-      reviewDate.setHours(0, 0, 0, 0)
-      return reviewDate <= currentDate
-    })
+      // Filter words that are actually due for review today
+      const reviewableWords = words.filter(word => {
+        const reviewDate = new Date(word.review_date)
+        reviewDate.setHours(0, 0, 0, 0)
+        const isDue = reviewDate <= currentDate
+        console.log(`🔍 getAllWordsForReviewToday DEBUG - Word ${word.id}: reviewDate=${reviewDate.toISOString().split('T')[0]}, currentDate=${currentDate.toISOString().split('T')[0]}, isDue=${isDue}`)
+        return isDue
+      })
 
-    console.log(`📅 Found ${reviewableWords.length} words due for review today across ${new Set(reviewableWords.map(w => (w.page as any).page_number)).size} pages`)
-    
-    return reviewableWords
+      console.log(`📅 Found ${reviewableWords.length} words due for review today across ${new Set(reviewableWords.map(w => (w.page as any).page_number)).size} pages`)
+      
+      return reviewableWords
+    }, 'getAllWordsForReviewToday')
   }
 
   async hasWordsForReviewToday(): Promise<{ hasReviews: boolean; notebookId?: string; pageNumber?: number }> {
@@ -432,6 +567,10 @@ class SupabaseService {
     if (!user) throw new Error('Not authenticated')
 
     const currentDateTime = getCurrentDate()
+    console.log(`🕰️ REVIEW CHECK DEBUG - getCurrentDate() returns: ${currentDateTime.toISOString()}`)
+    const normalizedDate = new Date(currentDateTime)
+    normalizedDate.setHours(0, 0, 0, 0)
+    console.log(`🕰️ REVIEW CHECK DEBUG - Normalized current date will be: ${normalizedDate.toISOString().split('T')[0]}`)
     
     // Get all learning words for the notebook (no timestamp filter)
     const { data: words, error } = await supabase
@@ -456,7 +595,9 @@ class SupabaseService {
       if (word.review_date) {
         const reviewDate = new Date(word.review_date)
         reviewDate.setHours(0, 0, 0, 0)
-        return currentDate >= reviewDate
+        const isDue = currentDate >= reviewDate
+        console.log(`🔍 TIMING DEBUG - Checking word ${word.id}: currentDate=${currentDate.toISOString().split('T')[0]}, reviewDate=${reviewDate.toISOString().split('T')[0]}, isDue=${isDue}`)
+        return isDue
       } else {
         // Fallback to creation date logic for words without review_date
         const wordCreated = new Date(word.created_at)
@@ -466,7 +607,7 @@ class SupabaseService {
           (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
         )
         
-        return daysSinceCreated > 14
+        return daysSinceCreated >= 14
       }
     })
 
@@ -599,83 +740,125 @@ class SupabaseService {
   async processBatchWordReviews(reviews: Array<{ wordId: string; remembered: boolean }>): Promise<{ success: boolean }> {
     if (reviews.length === 0) return { success: true }
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Not authenticated')
 
-    try {
+      try {
       const currentDate = getCurrentDate()
       const currentDateString = currentDate.toISOString().split('T')[0]
       
       console.log(`📦 Processing batch of ${reviews.length} word reviews...`)
 
-      // Get all words data in one query
-      const wordIds = reviews.map(r => r.wordId)
-      const { data: words, error: fetchError } = await supabase
-        .from('words')
-        .select('id, current_round, notebook_id, page_id, times_reviewed')
-        .in('id', wordIds)
+      // Try using the optimized database RPC function first
+      try {
+        console.log(`⚡ Using optimized database RPC for batch processing...`)
+        
+        // Process each review using the optimized database function
+        const rpcPromises = reviews.map(review => 
+          supabase.rpc('update_word_review_result', {
+            p_word_id: review.wordId,
+            p_remembered: review.remembered,
+            p_current_date: currentDateString
+          })
+        )
 
-      if (fetchError) throw fetchError
-      if (!words || words.length !== reviews.length) {
-        throw new Error('Some words not found')
-      }
-
-      // Prepare batch updates
-      const wordsToUpdate = []
-      const nextReviewDate = new Date(currentDate)
-      nextReviewDate.setDate(nextReviewDate.getDate() + 14)
-      const nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
-
-      for (const review of reviews) {
-        const word = words.find(w => w.id === review.wordId)
-        if (!word) continue
-
-        let updateData: any = {
-          id: word.id,
-          times_reviewed: (word.times_reviewed || 0) + 1,
-          last_reviewed: currentDateString,
-          updated_at: new Date().toISOString()
+        // Execute all RPC calls in parallel for maximum speed
+        const results = await Promise.all(rpcPromises)
+        
+        // Check for any errors
+        const errors = results.filter(result => result.error)
+        if (errors.length > 0) {
+          console.warn(`⚠️ ${errors.length} RPC calls failed, falling back to client-side processing`)
+          throw new Error('RPC batch processing had errors')
         }
 
-        if (review.remembered) {
-          // Remembered words are mastered and removed from future reviews
-          updateData.is_mastered = true
-          updateData.status = 'mastered'
-          // No review_date needed - they're done forever
-          console.log(`🏆 Word ${word.id} remembered and mastered (round ${word.current_round})`)
-        } else {
-          // Forgotten words advance to next round by 1
-          updateData.current_round = word.current_round + 1
-          updateData.review_date = nextReviewDateString
-          updateData.status = 'learning'
-          console.log(`📈 Word ${word.id} forgotten - advanced from round ${word.current_round} to ${word.current_round + 1}`)
+        console.log(`🚀 RPC batch processing completed: ${reviews.length} words processed via database functions`)
+      } catch (rpcError) {
+        console.log(`🔄 RPC failed, falling back to client-side batch processing...`, rpcError)
+
+        // Fallback to client-side batch processing
+        // Get all words data in one query
+        const wordIds = reviews.map(r => r.wordId)
+        const { data: words, error: fetchError } = await supabase
+          .from('words')
+          .select('id, current_round, notebook_id, page_id, times_reviewed')
+          .in('id', wordIds)
+
+        if (fetchError) throw fetchError
+        if (!words || words.length !== reviews.length) {
+          throw new Error('Some words not found')
         }
 
-        wordsToUpdate.push(updateData)
-      }
+        // Prepare batch updates
+        const wordsToUpdate = []
+        const nextReviewDate = new Date(currentDate)
+        nextReviewDate.setDate(nextReviewDate.getDate() + 14)
+        const nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
 
-      // Batch update all words
-      if (wordsToUpdate.length > 0) {
-        for (const wordUpdate of wordsToUpdate) {
-          const { error: updateError } = await supabase
-            .from('words')
-            .update(wordUpdate)
-            .eq('id', wordUpdate.id)
+        for (const review of reviews) {
+          const word = words.find(w => w.id === review.wordId)
+          if (!word) continue
 
-          if (updateError) {
-            console.error(`Error updating word ${wordUpdate.id}:`, updateError)
-            throw updateError
+          let updateData: any = {
+            id: word.id,
+            times_reviewed: (word.times_reviewed || 0) + 1,
+            last_reviewed: currentDateString,
+            updated_at: new Date().toISOString()
           }
-        }
-      }
 
-      // Update notebook last activity (get unique notebook IDs)
-      const notebookIds = [...new Set(words.map(w => w.notebook_id))]
-      for (const notebookId of notebookIds) {
-        await supabase
-          .from('notebooks')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', notebookId)
+          if (review.remembered) {
+            // Remembered words are mastered and removed from future reviews
+            updateData.is_mastered = true
+            updateData.status = 'mastered'
+            // No review_date needed - they're done forever
+            console.log(`🏆 Word ${word.id} remembered and mastered (round ${word.current_round})`)
+          } else {
+            // Forgotten words advance to next round by 1
+            updateData.current_round = word.current_round + 1
+            updateData.review_date = nextReviewDateString
+            updateData.status = 'learning'
+            console.log(`📈 Word ${word.id} forgotten - advanced from round ${word.current_round} to ${word.current_round + 1}`)
+          }
+
+          wordsToUpdate.push(updateData)
+        }
+
+        // Batch update all words in parallel for maximum performance
+        if (wordsToUpdate.length > 0) {
+          console.log(`⚡ Updating ${wordsToUpdate.length} words in parallel...`)
+          
+          // Process updates in parallel for dramatic speed improvement
+          const updatePromises = wordsToUpdate.map(async (wordUpdate) => {
+            const { error } = await supabase
+              .from('words')
+              .update(wordUpdate)
+              .eq('id', wordUpdate.id)
+            
+            if (error) {
+              console.error(`Error updating word ${wordUpdate.id}:`, error)
+              throw error
+            }
+            return wordUpdate.id
+          })
+
+          // Wait for all updates to complete
+          const results = await Promise.all(updatePromises)
+          console.log(`🚀 Parallel update completed: ${results.length} words updated`)
+        }
+
+        // Update notebook last activity in parallel (get unique notebook IDs)
+        const notebookIds = [...new Set(words.map(w => w.notebook_id))]
+        if (notebookIds.length > 0) {
+          const notebookUpdatePromises = notebookIds.map(notebookId => 
+            supabase
+              .from('notebooks')
+              .update({ updated_at: new Date().toISOString() })
+              .eq('id', notebookId)
+          )
+          await Promise.all(notebookUpdatePromises)
+          console.log(`📚 Updated ${notebookIds.length} notebooks in parallel`)
+        }
       }
 
       console.log(`✅ Batch review completed: ${reviews.length} words processed`)
@@ -684,6 +867,7 @@ class SupabaseService {
       console.error('Failed to process batch word reviews:', error)
       throw error
     }
+    }, `processBatchWordReviews(${reviews.length} words)`)
   }
 
   async unlockTodaysPages(): Promise<void> {
@@ -759,6 +943,39 @@ class SupabaseService {
   clearReviewCallTracker() {
     this.reviewCallTracker.clear()
     this.pendingCalls.clear()
+  }
+
+  // =============================================
+  // CACHE UTILITY METHODS
+  // =============================================
+
+  // Clear cache when data changes (call after create/update/delete operations)
+  clearCache(pattern?: string) {
+    dataCache.clear(pattern)
+    console.log(`🧹 Cache cleared${pattern ? ` (pattern: ${pattern})` : ''}, size: ${dataCache.size()}`)
+  }
+
+  // Get cached data with automatic fallback to database
+  async getCachedData<T>(
+    cacheKey: string,
+    fetchFunction: () => Promise<T>,
+    ttl: number = 5 * 60 * 1000 // 5 minutes default
+  ): Promise<T> {
+    // Try cache first
+    const cached = dataCache.get<T>(cacheKey)
+    if (cached !== null) {
+      console.log(`📦 Cache hit: ${cacheKey}`)
+      return cached
+    }
+
+    // Cache miss - fetch from database
+    console.log(`🔍 Cache miss: ${cacheKey} - fetching from database`)
+    const data = await fetchFunction()
+    
+    // Store in cache
+    dataCache.set(cacheKey, data, ttl)
+    
+    return data
   }
 }
 

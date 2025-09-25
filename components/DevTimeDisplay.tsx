@@ -110,7 +110,7 @@ export function DevTimeDisplay() {
         <Text style={styles.time}>{formatTime(currentTime)}</Text>
         {isSimulationActive && (
           <Text style={styles.elapsed}>
-            {isAdvancing ? '⏳ Loading Day...' : `Day ${currentSimulatedDay + 1} of simulation`}
+            {isAdvancing ? '⏳ Loading Day...' : `Day ${currentSimulatedDay} of simulation`}
           </Text>
         )}
       </View>
@@ -120,9 +120,9 @@ export function DevTimeDisplay() {
           {/* Day Navigation */}
           <View style={styles.dayNavigation}>
             <TouchableOpacity 
-              style={[styles.navButton, { opacity: currentSimulatedDay === 0 || isAdvancing ? 0.3 : 1 }]}
+              style={[styles.navButton, { opacity: currentSimulatedDay === 1 || isAdvancing ? 0.3 : 1 }]}
               onPress={() => handlePreviousDay()}
-              disabled={currentSimulatedDay === 0 || isAdvancing}
+              disabled={currentSimulatedDay === 1 || isAdvancing}
             >
               <Text style={styles.navButtonText}>{isAdvancing ? '⏳ Loading...' : '◀ Previous Day'}</Text>
             </TouchableOpacity>
