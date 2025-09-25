@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import {
   View,
   Text,
@@ -37,17 +37,35 @@ interface PageData {
 
 export default function NotebookDetailsScreen() {
   const router = useRouter()
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, focusPage, openBubble } = useLocalSearchParams<{ 
+    id: string, 
+    focusPage?: string, 
+    openBubble?: string 
+  }>()
   const { colors } = useTheme()
   const { getCurrentDate } = useDevTime()
   const [notebook, setNotebook] = useState<any>(null)
   const [pages, setPages] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedPage, setSelectedPage] = useState<PageData | null>(null)
+  const [autoFocusedPageNumber, setAutoFocusedPageNumber] = useState<number | null>(null)
+  const scrollViewRef = useRef<ScrollView>(null)
 
   useEffect(() => {
     loadNotebookData()
   }, [id]) // Only reload when notebook ID changes
+
+  // Auto-focus on page when URL parameters are present
+  useEffect(() => {
+    if (focusPage && openBubble && !loading && pathData.length > 0) {
+      const pageNumber = parseInt(focusPage, 10)
+      if (!isNaN(pageNumber)) {
+        console.log(`🎯 Auto-focusing on page ${pageNumber} with speech bubble`)
+        setAutoFocusedPageNumber(pageNumber)
+        focusOnPage(pageNumber)
+      }
+    }
+  }, [focusPage, openBubble, loading, pathData])
 
   // Refresh data when screen comes into focus (e.g., returning from review)
   useFocusEffect(
@@ -329,6 +347,9 @@ export default function NotebookDetailsScreen() {
       }
     }
 
+    // Reset auto-focus state when user manually interacts
+    setAutoFocusedPageNumber(null)
+    
     // Toggle: if same page is already selected, close it; otherwise open new one
     if (selectedPage?.id === page.id) {
       setSelectedPage(null)
@@ -355,6 +376,36 @@ export default function NotebookDetailsScreen() {
 
   const closePage = () => {
     setSelectedPage(null)
+    setAutoFocusedPageNumber(null)
+  }
+
+  const focusOnPage = (pageNumber: number) => {
+    // Find the page in pathData
+    const targetPageIndex = pathData.findIndex(page => page.pageNumber === pageNumber)
+    if (targetPageIndex === -1) {
+      console.warn(`Page ${pageNumber} not found for auto-focus`)
+      return
+    }
+
+    const targetPage = pathData[targetPageIndex]
+    
+    // Calculate scroll position using the same logic as getNodePosition
+    const targetPosition = getNodePosition(targetPageIndex)
+    const scrollY = Math.max(0, targetPosition.y - 200) // Center the page with some top offset
+    
+    // Auto-scroll to the page
+    setTimeout(() => {
+      scrollViewRef.current?.scrollTo({
+        y: scrollY,
+        animated: true
+      })
+    }, 100) // Small delay to ensure the view is ready
+
+    // Auto-select the page to show speech bubble
+    setTimeout(() => {
+      setSelectedPage(targetPage)
+      console.log(`🎯 Auto-focused on Page ${pageNumber}`)
+    }, 300) // Delay to let scroll animation start first
   }
 
   // Calculate smooth Duolingo-style curve positions with even spacing
@@ -436,17 +487,25 @@ export default function NotebookDetailsScreen() {
                  page.type === 'review' ? 'Review' : 'Lesson'} {page.pageNumber}
               </Text>
               <Text style={styles.speechBubbleDescription}>
-                {page.type === 'review' ? 
-                  `Words ready for review today` :
-                  page.allWordsMastered ?
-                  `All words mastered! 🎉` :
-                  page.daysUntilNextReview && page.daysUntilNextReview > 0 ?
-                  `Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` :
-                  page.status === 'completed' && page.type === 'lesson' ?
-                  `Reviewed today! Next review tomorrow` :
-                  page.completedWords > 0 || page.actualWordsCount > 0 ?
-                  `Page has words - next review coming soon` :
-                  `Add ${page.wordsCount} new words`
+                {autoFocusedPageNumber === page.pageNumber ? 
+                  // Special messaging for auto-focused pages
+                  (page.type === 'review' ? 
+                    `✨ Ready to review today's words!` :
+                    page.completedWords > 0 || page.actualWordsCount > 0 ?
+                    `✨ This page has words - ready for next review!` :
+                    `✨ Add today's ${page.wordsCount} words here!`) :
+                  // Normal messaging for manually selected pages
+                  (page.type === 'review' ? 
+                    `Words ready for review today` :
+                    page.allWordsMastered ?
+                    `All words mastered! 🎉` :
+                    page.daysUntilNextReview && page.daysUntilNextReview > 0 ?
+                    `Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` :
+                    page.status === 'completed' && page.type === 'lesson' ?
+                    `Reviewed today! Next review tomorrow` :
+                    page.completedWords > 0 || page.actualWordsCount > 0 ?
+                    `Page has words - next review coming soon` :
+                    `Add ${page.wordsCount} new words`)
                 }
               </Text>
               {page.allWordsMastered ? (
@@ -527,7 +586,7 @@ export default function NotebookDetailsScreen() {
 
 
       {/* Learning Path */}
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.pathContainer}>
+      <ScrollView ref={scrollViewRef} style={styles.scrollView} contentContainerStyle={styles.pathContainer}>
         <TouchableOpacity 
           style={[styles.pathBackground, { height: pathData.length * 130 + 250 }]}
           activeOpacity={1}

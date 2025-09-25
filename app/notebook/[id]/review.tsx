@@ -7,7 +7,9 @@ import {
   Animated,
   Alert,
   Dimensions,
+  ScrollView,
 } from 'react-native'
+import Svg, { Circle } from 'react-native-svg'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { PanGestureHandler, State } from 'react-native-gesture-handler'
 import { useRouter, useLocalSearchParams } from 'expo-router'
@@ -175,33 +177,32 @@ export default function ReviewScreen() {
     }
   }
 
-  // Use ref to throttle gesture updates for better performance
-  const lastGestureUpdate = useRef(0)
-  
   const handleGesture = useCallback((event: any) => {
     const { translationX } = event.nativeEvent
     
-    // Throttle updates to ~60fps for better performance
-    const now = Date.now()
-    if (now - lastGestureUpdate.current < 16) return // ~60fps throttling
-    lastGestureUpdate.current = now
-    
     // Pre-calculate all values to avoid repeated computations
     const progress = Math.abs(translationX) / SCREEN_WIDTH
-    const rotationValue = (translationX / SCREEN_WIDTH) * 30 // 30 degree max rotation
-    const scaleValue = 1 - progress * 0.05 // Very subtle scale (0.95 minimum)
-    const opacityValue = 1 - progress * 0.3 // Fade to 0.7 minimum
+    const rotationValue = (translationX / SCREEN_WIDTH) * 25 // Reduced rotation for smoother feel
+    const scaleValue = Math.max(0.95, 1 - progress * 0.05) // Smoother scale with bounds
+    const opacityValue = Math.max(0.7, 1 - progress * 0.3) // Smoother opacity with bounds
     
-    // Batch current card animations
-    currentCardTranslateX.setValue(translationX)
-    currentCardRotate.setValue(rotationValue)
-    currentCardScale.setValue(scaleValue)
-    currentCardOpacity.setValue(opacityValue)
-    
-    // Batch next card animations
-    nextCardScale.setValue(0.95 + (progress * 0.05))
-    nextCardOpacity.setValue(0.8 + (progress * 0.2))
-    nextCardTranslateY.setValue(10 - (progress * 10))
+    // Use requestAnimationFrame for smooth 60fps updates
+    requestAnimationFrame(() => {
+      // Batch current card animations
+      currentCardTranslateX.setValue(translationX)
+      currentCardRotate.setValue(rotationValue)
+      currentCardScale.setValue(scaleValue)
+      currentCardOpacity.setValue(opacityValue)
+      
+      // Batch next card animations - smoother reveal
+      const nextScale = 0.95 + (progress * 0.05)
+      const nextOpacity = 0.8 + (progress * 0.2)
+      const nextY = 10 - (progress * 10)
+      
+      nextCardScale.setValue(nextScale)
+      nextCardOpacity.setValue(nextOpacity)
+      nextCardTranslateY.setValue(nextY)
+    })
   }, [])
 
   const handleGestureEnd = (event: any) => {
@@ -231,45 +232,52 @@ export default function ReviewScreen() {
       Animated.spring(currentCardTranslateX, { 
         toValue: 0, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150, // Increased tension for snappier return
+        friction: 10,
+        mass: 0.8 // Lower mass for quicker response
       }),
       Animated.spring(currentCardRotate, { 
         toValue: 0, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150,
+        friction: 10,
+        mass: 0.8
       }),
       Animated.spring(currentCardScale, { 
         toValue: 1, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150,
+        friction: 10,
+        mass: 0.8
       }),
       Animated.spring(currentCardOpacity, { 
         toValue: 1, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150,
+        friction: 10,
+        mass: 0.8
       }),
-      // Reset next card to background position
+      // Reset next card to background position with matching physics
       Animated.spring(nextCardScale, { 
         toValue: 0.95, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150,
+        friction: 10,
+        mass: 0.8
       }),
       Animated.spring(nextCardOpacity, { 
         toValue: 0.8, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150,
+        friction: 10,
+        mass: 0.8
       }),
       Animated.spring(nextCardTranslateY, { 
         toValue: 10, 
         useNativeDriver: true,
-        tension: 100,
-        friction: 8
+        tension: 150,
+        friction: 10,
+        mass: 0.8
       }),
     ]).start()
   }
@@ -284,54 +292,52 @@ export default function ReviewScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
     }
 
-    // Smooth card deck transition
-    const toX = direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2
-    const toRotation = direction === 'right' ? 30 : -30
+    // Smooth Tinder-like card transition
+    const toX = direction === 'right' ? SCREEN_WIDTH * 1.5 : -SCREEN_WIDTH * 1.5
+    const toRotation = direction === 'right' ? 25 : -25
     
     Animated.parallel([
-      // Current card exit animation
+      // Current card exit animation - faster and smoother like Tinder
       Animated.timing(currentCardTranslateX, {
         toValue: toX,
-        duration: 250,
+        duration: 200, // Reduced for snappier feel
         useNativeDriver: true,
       }),
       Animated.timing(currentCardRotate, {
         toValue: toRotation,
-        duration: 250,
+        duration: 200,
         useNativeDriver: true,
       }),
       Animated.timing(currentCardScale, {
-        toValue: 0.8,
-        duration: 250,
+        toValue: 0.85,
+        duration: 200,
         useNativeDriver: true,
       }),
       Animated.timing(currentCardOpacity, {
         toValue: 0,
-        duration: 200,
+        duration: 150, // Fade out quickly
         useNativeDriver: true,
       }),
       
-      // Next card becomes current (smooth reveal)
+      // Next card becomes current (immediate and smooth reveal)
       Animated.timing(nextCardScale, {
         toValue: 1,
-        duration: 200,
+        duration: 150, // Quick reveal
         useNativeDriver: true,
       }),
       Animated.timing(nextCardOpacity, {
         toValue: 1,
-        duration: 200,
+        duration: 150,
         useNativeDriver: true,
       }),
       Animated.timing(nextCardTranslateY, {
         toValue: 0,
-        duration: 200,
+        duration: 150,
         useNativeDriver: true,
       }),
     ]).start()
 
     // Complete transition immediately when animation starts
-    // This prevents the "refresh effect" by updating state before the animation delay
-    // Make sure this completes synchronously for the critical ref update
     await completeCardTransition(remembered)
   }
 
@@ -346,8 +352,6 @@ export default function ReviewScreen() {
       
       console.log(`📝 Added review for word "${currentWord.word}": ${remembered ? 'remembered' : 'forgotten'}`)
       console.log(`📊 Batch now contains ${newBatchReviews.length} reviews:`, newBatchReviews.map(r => r.wordId))
-      
-      // Note: Only using batch processing to avoid duplicate processing
       
       // Update refs immediately for UI feedback (optimistic update)
       visualStats.current = {
@@ -368,12 +372,16 @@ export default function ReviewScreen() {
         
         resetAnimationsForNewCard()
       } else {
-        // Review session complete
+        // Review session complete - hide all cards first
         React.startTransition(() => {
           setCurrentIndex(visualCurrentIndex.current)
           setReviewedWords({ ...visualStats.current })
         })
-        completeReviewSession()
+        
+        // Small delay to complete card exit animation, then show completion screen
+        setTimeout(() => {
+          completeReviewSession()
+        }, 300)
       }
     } catch (error) {
       console.error('Review processing error:', error)
@@ -403,13 +411,23 @@ export default function ReviewScreen() {
     resetAnimationsForNewCard()
   }
 
+  const [showCompletionScreen, setShowCompletionScreen] = useState(false)
+  const [reviewResults, setReviewResults] = useState<{
+    remembered: any[]
+    forgotten: any[]
+  }>({ remembered: [], forgotten: [] })
+  const [showWordsList, setShowWordsList] = useState<'remembered' | 'forgotten' | null>(null)
+  
+  // Animation values for completion screen
+  const dashboardFadeAnim = useRef(new Animated.Value(0)).current
+  const dashboardSlideAnim = useRef(new Animated.Value(30)).current
+
   const completeReviewSession = async () => {
     console.log(`🏁 CompleteReviewSession called - batchReviews.length: ${batchReviews.length}`)
     console.log(`🏁 batchReviewsRef.current.length: ${batchReviewsRef.current.length}`)
     console.log(`🏁 Current batch contents:`, batchReviews.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
     
-    // Process batch reviews before showing completion dialog
-    // Use the ref version which should be most up-to-date
+    // Process batch reviews before showing completion screen
     const reviewsToProcess = batchReviewsRef.current.length > 0 ? batchReviewsRef.current : batchReviews
     
     if (reviewsToProcess.length > 0) {
@@ -424,7 +442,7 @@ export default function ReviewScreen() {
       } catch (error) {
         console.error('❌ Batch processing failed:', error)
         Alert.alert('Error', `Failed to save review results: ${error instanceof Error ? error.message : 'Unknown error'}`)
-        return // Don't show completion dialog if batch processing failed
+        return // Don't show completion screen if batch processing failed
       } finally {
         setIsProcessingBatch(false)
       }
@@ -432,50 +450,39 @@ export default function ReviewScreen() {
       console.log('⚠️ No batch reviews to process - all words may have been processed individually')
     }
 
-    const sessionDuration = Math.round((Date.now() - sessionStartTime) / 1000 / 60) // minutes
-    // Use visualStats.current for accurate counts (state might not be updated yet)
-    const finalStats = visualStats.current
-    const accuracy = Math.round((finalStats.remembered / finalStats.total) * 100)
+    // Collect words by result for the completion screen
+    const remembered: any[] = []
+    const forgotten: any[] = []
     
-    Alert.alert(
-      'Review Complete! 🎉',
-      `Great work! You reviewed ${finalStats.total} words in ${sessionDuration} minutes.\n\nAccuracy: ${accuracy}%\nRemembered: ${finalStats.remembered}\nNeed more practice: ${finalStats.forgotten}`,
-      [
-        {
-          text: 'Review More',
-          onPress: () => {
-            // Reset for another round
-            setCurrentIndex(0)
-            setShowMeaning(false)
-            setReviewedWords({ remembered: 0, forgotten: 0, total: 0 })
-            setBatchReviews([]) // Clear batch reviews for new session
-            batchReviewsRef.current = []
-            visualCurrentIndex.current = 0
-            visualStats.current = { remembered: 0, forgotten: 0, total: 0 }
-            resetAnimations()
-          }
-        },
-        {
-          text: 'Done',
-          onPress: () => {
-            // Navigate back with a flag indicating reviews were completed
-            if (router.canGoBack()) {
-              router.back()
-            } else {
-              router.push('/')
-            }
-            
-            // Set a flag that reviews were completed for home screen to detect
-            setTimeout(() => {
-              if (typeof window !== 'undefined') {
-                (window as any).reviewsJustCompleted = true
-              }
-            }, 100)
-          },
-          style: 'default'
+    batchReviews.forEach(review => {
+      const word = words.find(w => w.id === review.wordId)
+      if (word) {
+        if (review.remembered) {
+          remembered.push(word)
+        } else {
+          forgotten.push(word)
         }
-      ]
-    )
+      }
+    })
+    
+    setReviewResults({ remembered, forgotten })
+    
+    // Show completion screen with animation
+    setShowCompletionScreen(true)
+    
+    // Start entrance animations
+    Animated.parallel([
+      Animated.timing(dashboardFadeAnim, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(dashboardSlideAnim, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+    ]).start()
   }
 
   const handleCardTap = useCallback(() => {
@@ -637,6 +644,36 @@ export default function ReviewScreen() {
     handleSwipe(remembered ? 'right' : 'left')
   }
 
+  const resetReviewSession = () => {
+    setCurrentIndex(0)
+    setShowMeaning(false)
+    setReviewedWords({ remembered: 0, forgotten: 0, total: 0 })
+    setBatchReviews([])
+    batchReviewsRef.current = []
+    visualCurrentIndex.current = 0
+    visualStats.current = { remembered: 0, forgotten: 0, total: 0 }
+    setShowCompletionScreen(false)
+    resetAnimations()
+  }
+
+  const handleCompletionDone = () => {
+    setShowCompletionScreen(false)
+    
+    // Set a flag that reviews were completed for home screen to detect
+    if (typeof window !== 'undefined') {
+      (window as any).reviewsJustCompleted = true
+    }
+    
+    // Navigate back with a small delay to ensure flag is set
+    setTimeout(() => {
+      if (router.canGoBack()) {
+        router.back()
+      } else {
+        router.push('/(tabs)/')
+      }
+    }, 50)
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -667,6 +704,276 @@ export default function ReviewScreen() {
             Processing {batchReviews.length} word reviews
           </Text>
         </View>
+      </SafeAreaView>
+    )
+  }
+
+  // Show word lists if requested
+  if (showWordsList) {
+    const wordsToShow = showWordsList === 'remembered' ? reviewResults.remembered : reviewResults.forgotten
+    const title = showWordsList === 'remembered' ? 'Remembered Words' : 'Words to Practice'
+    const subtitle = showWordsList === 'remembered' ? 'Great job! These words are moving forward.' : 'These words need more practice.'
+    
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.wordListScreen}>
+          <View style={styles.wordListHeader}>
+            <TouchableOpacity 
+              style={styles.backToStatsButton}
+              onPress={() => setShowWordsList(null)}
+            >
+              <Text style={styles.backToStatsText}>← Back to Stats</Text>
+            </TouchableOpacity>
+            
+            <View style={styles.wordListTitleContainer}>
+              <Text style={styles.wordListTitle}>{title}</Text>
+              <Text style={styles.wordListSubtitle}>{subtitle}</Text>
+            </View>
+          </View>
+
+          <ScrollView style={styles.wordsList} showsVerticalScrollIndicator={false}>
+            {wordsToShow.map((word, index) => {
+              const roundColors = ROUND_COLORS[word.current_round as keyof typeof ROUND_COLORS]
+              return (
+                <Animated.View 
+                  key={word.id} 
+                  style={[
+                    styles.wordListItem,
+                    { 
+                      backgroundColor: roundColors.light,
+                      borderLeftColor: roundColors.primary,
+                    }
+                  ]}
+                >
+                  <View style={styles.wordListItemHeader}>
+                    <Text style={styles.wordListItemWord}>{word.word}</Text>
+                    <View style={[styles.roundIndicator, { backgroundColor: roundColors.primary }]}>
+                      <Text style={styles.roundIndicatorText}>R{word.current_round}</Text>
+                    </View>
+                  </View>
+                  
+                  <Text style={styles.wordListItemMeaning}>{word.meaning}</Text>
+                  
+                  {word.notes && (
+                    <Text style={styles.wordListItemNotes}>{word.notes}</Text>
+                  )}
+                </Animated.View>
+              )
+            })}
+          </ScrollView>
+
+          <TouchableOpacity 
+            style={styles.doneButton}
+            onPress={handleCompletionDone}
+          >
+            <Text style={styles.doneButtonText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  // Show completion dashboard if reviews are done
+  if (showCompletionScreen) {
+    const sessionDuration = Math.round((Date.now() - sessionStartTime) / 1000 / 60) // minutes
+    const finalStats = visualStats.current
+    const accuracy = finalStats.total > 0 ? Math.round((finalStats.remembered / finalStats.total) * 100) : 0
+
+    // Calculate round distribution
+    const roundStats = [1, 2, 3, 4].map(round => {
+      const roundWords = reviewResults.remembered.concat(reviewResults.forgotten).filter(w => w.current_round === round)
+      const remembered = reviewResults.remembered.filter(w => w.current_round === round).length
+      const total = roundWords.length
+      return {
+        round,
+        total,
+        remembered,
+        forgotten: total - remembered,
+        accuracy: total > 0 ? Math.round((remembered / total) * 100) : 0,
+        colors: ROUND_COLORS[round as keyof typeof ROUND_COLORS]
+      }
+    }).filter(r => r.total > 0)
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <Animated.View 
+          style={[
+            styles.dashboardScreenCompact,
+            {
+              opacity: dashboardFadeAnim,
+              transform: [{ translateY: dashboardSlideAnim }]
+            }
+          ]}
+        >
+          {/* Header */}
+          <Animated.View style={styles.dashboardHeaderCompact}>
+            <Text style={styles.dashboardTitleCompact}>🎉 Review Complete!</Text>
+          </Animated.View>
+
+          {/* Circular Progress Dashboard */}
+          <Animated.View style={styles.circularStatsContainer}>
+            {/* Overall Progress Circle */}
+            <Animated.View 
+              style={[
+                styles.overallProgressContainer,
+                {
+                  opacity: dashboardFadeAnim,
+                  transform: [{ 
+                    scale: dashboardFadeAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.8, 1]
+                    })
+                  }]
+                }
+              ]}
+            >
+              <View style={styles.overallCircleContainerLarge}>
+                <Svg width={160} height={160} style={styles.svgCircle}>
+                  {/* Background Circle */}
+                  <Circle
+                    cx="80"
+                    cy="80"
+                    r="70"
+                    stroke={colors.gray200 || '#E5E7EB'}
+                    strokeWidth="16"
+                    fill="transparent"
+                  />
+                  {/* Progress Circle */}
+                  <Circle
+                    cx="80"
+                    cy="80"
+                    r="70"
+                    stroke={colors.primary}
+                    strokeWidth="16"
+                    fill="transparent"
+                    strokeDasharray={`${2 * Math.PI * 70}`}
+                    strokeDashoffset={`${2 * Math.PI * 70 * (1 - accuracy / 100)}`}
+                    strokeLinecap="round"
+                    transform="rotate(-90 80 80)"
+                  />
+                </Svg>
+                
+                <View style={styles.overallProgressContentLarge}>
+                  <Text style={styles.overallProgressNumberLarge}>{accuracy}%</Text>
+                  <Text style={styles.overallProgressLabelLarge}>Overall Score</Text>
+                </View>
+              </View>
+            </Animated.View>
+
+            {/* Round Progress Circles */}
+            <View style={styles.roundProgressContainer}>
+              {roundStats.map((roundStat, index) => (
+                <Animated.View 
+                  key={roundStat.round}
+                  style={[
+                    styles.roundProgressWrapper,
+                    {
+                      opacity: dashboardFadeAnim,
+                      transform: [{ 
+                        scale: dashboardFadeAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.6, 1]
+                        })
+                      }]
+                    }
+                  ]}
+                >
+                  <View style={styles.roundCircleContainerLarge}>
+                    <Svg width={100} height={100} style={styles.svgCircle}>
+                      {/* Background Circle */}
+                      <Circle
+                        cx="50"
+                        cy="50"
+                        r="42"
+                        stroke={colors.gray200 || '#E5E7EB'}
+                        strokeWidth="12"
+                        fill="transparent"
+                      />
+                      {/* Progress Circle */}
+                      <Circle
+                        cx="50"
+                        cy="50"
+                        r="42"
+                        stroke={roundStat.colors.primary}
+                        strokeWidth="12"
+                        fill="transparent"
+                        strokeDasharray={`${2 * Math.PI * 42}`}
+                        strokeDashoffset={`${2 * Math.PI * 42 * (1 - roundStat.accuracy / 100)}`}
+                        strokeLinecap="round"
+                        transform="rotate(-90 50 50)"
+                      />
+                    </Svg>
+                    
+                    <View style={styles.roundProgressContentLarge}>
+                      <Text style={[styles.roundProgressNumberLarge, { color: roundStat.colors.primary }]}>
+                        {roundStat.accuracy}%
+                      </Text>
+                      <Text style={styles.roundProgressLabelLarge}>R{roundStat.round}</Text>
+                      <Text style={styles.roundProgressCountLarge}>{roundStat.remembered}/{roundStat.total}</Text>
+                    </View>
+                  </View>
+                </Animated.View>
+              ))}
+            </View>
+          </Animated.View>
+
+          {/* Quick Stats */}
+          <Animated.View style={styles.quickStatsRow}>
+            <View style={styles.quickStat}>
+              <Text style={styles.quickStatNumber}>{finalStats.total}</Text>
+              <Text style={styles.quickStatLabel}>Total</Text>
+            </View>
+            <View style={styles.quickStat}>
+              <Text style={[styles.quickStatNumber, { color: '#10B981' }]}>{finalStats.remembered}</Text>
+              <Text style={styles.quickStatLabel}>Remembered</Text>
+            </View>
+            <View style={styles.quickStat}>
+              <Text style={[styles.quickStatNumber, { color: '#F59E0B' }]}>{finalStats.forgotten}</Text>
+              <Text style={styles.quickStatLabel}>Practice</Text>
+            </View>
+            <View style={styles.quickStat}>
+              <Text style={styles.quickStatNumber}>{sessionDuration}m</Text>
+              <Text style={styles.quickStatLabel}>Time</Text>
+            </View>
+          </Animated.View>
+
+          {/* Action Buttons */}
+          <Animated.View 
+            style={[
+              styles.actionButtonsCompact,
+              {
+                opacity: dashboardFadeAnim,
+                transform: [{ 
+                  translateY: dashboardFadeAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [30, 0]
+                  })
+                }]
+              }
+            ]}
+          >
+            <TouchableOpacity 
+              style={[styles.actionButtonCompact, styles.rememberedWordsButtonCompact]}
+              onPress={() => setShowWordsList('remembered')}
+            >
+              <Text style={styles.actionButtonTextCompact}>✅ Remembered ({finalStats.remembered})</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.actionButtonCompact, styles.practiceWordsButtonCompact]}
+              onPress={() => setShowWordsList('forgotten')}
+            >
+              <Text style={styles.actionButtonTextCompact}>📝 Practice ({finalStats.forgotten})</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.actionButtonCompact, styles.doneButtonCompact]}
+              onPress={handleCompletionDone}
+            >
+              <Text style={[styles.actionButtonTextCompact, styles.doneButtonTextWhiteCompact]}>Done</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </Animated.View>
       </SafeAreaView>
     )
   }
@@ -1092,5 +1399,443 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  
+  // Compact Dashboard Screen Styles
+  dashboardScreenCompact: {
+    flex: 1,
+    padding: 20,
+    justifyContent: 'space-between',
+  },
+  dashboardHeaderCompact: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  dashboardTitleCompact: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  
+  // Main Stats Dashboard
+  mainStatsContainer: {
+    marginBottom: 30,
+  },
+  accuracyContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  accuracyCircle: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 6,
+    borderColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  accuracyNumber: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: colors.primary,
+  },
+  accuracyLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  
+  // Stats Grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  statCard: {
+    width: '48%',
+    backgroundColor: colors.cardBackground,
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statCardSuccess: {
+    borderColor: '#10B981',
+    backgroundColor: colors.successLight || '#ECFDF5',
+  },
+  statCardWarning: {
+    borderColor: '#F59E0B',
+    backgroundColor: colors.warningLight || '#FEF3C7',
+  },
+  statCardNumber: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  statCardLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  
+  // Round Performance
+  roundPerformanceContainer: {
+    marginBottom: 30,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginBottom: 16,
+  },
+  roundStatCard: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  roundStatHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  roundStatTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  roundBadgeSmall: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roundBadgeSmallText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  roundStatTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  roundStatAccuracy: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+  },
+  roundStatBar: {
+    height: 6,
+    backgroundColor: colors.gray200,
+    borderRadius: 3,
+    marginBottom: 8,
+  },
+  roundStatBarFill: {
+    height: '100%',
+    borderRadius: 3,
+    width: '100%',
+    transformOrigin: 'left',
+  },
+  roundStatDetails: {
+    alignItems: 'center',
+  },
+  roundStatDetail: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  
+  // Action Buttons
+  actionButtonsContainer: {
+    gap: 12,
+  },
+  actionButton: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  rememberedWordsButton: {
+    backgroundColor: colors.successLight || '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  practiceWordsButton: {
+    backgroundColor: colors.warningLight || '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  doneMainButton: {
+    backgroundColor: colors.primary,
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  doneButtonTextWhite: {
+    color: '#FFFFFF',
+  },
+  
+  // Word List Screen
+  wordListScreen: {
+    flex: 1,
+  },
+  wordListHeader: {
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  backToStatsButton: {
+    marginBottom: 16,
+  },
+  backToStatsText: {
+    fontSize: 16,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  wordListTitleContainer: {
+    alignItems: 'center',
+  },
+  wordListTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  wordListSubtitle: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  wordsList: {
+    flex: 1,
+    padding: 20,
+  },
+  wordListItem: {
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  wordListItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  wordListItemWord: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1A202C',
+    flex: 1,
+  },
+  roundIndicator: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  roundIndicatorText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  wordListItemMeaning: {
+    fontSize: 16,
+    color: '#2D3748',
+    marginBottom: 4,
+  },
+  wordListItemNotes: {
+    fontSize: 14,
+    color: '#4A5568',
+    fontStyle: 'italic',
+  },
+  doneButton: {
+    margin: 20,
+    backgroundColor: colors.primary,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  doneButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+
+  // Circular Progress Layout Styles - Larger Version
+  circularStatsContainer: {
+    alignItems: 'center',
+    marginBottom: 30,
+  },
+  overallProgressContainer: {
+    alignItems: 'center',
+    marginBottom: 30,
+  },
+  overallCircleContainerLarge: {
+    width: 160,
+    height: 160,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  svgCircle: {
+    position: 'absolute',
+  },
+  overallProgressContentLarge: {
+    position: 'absolute',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  overallProgressNumberLarge: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: colors.primary,
+  },
+  overallProgressLabelLarge: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  
+  // Round Progress Circles - Larger Version
+  roundProgressContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20,
+    flexWrap: 'wrap',
+  },
+  roundProgressWrapper: {
+    alignItems: 'center',
+  },
+  roundCircleContainerLarge: {
+    width: 100,
+    height: 100,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roundProgressContentLarge: {
+    position: 'absolute',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roundProgressNumberLarge: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  roundProgressLabelLarge: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  roundProgressCountLarge: {
+    fontSize: 10,
+    color: colors.textSecondary,
+  },
+  
+  // Quick Stats Row
+  quickStatsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  quickStat: {
+    alignItems: 'center',
+  },
+  quickStatNumber: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  quickStatLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  
+  // Compact Action Buttons
+  actionButtonsCompact: {
+    gap: 10,
+  },
+  actionButtonCompact: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  rememberedWordsButtonCompact: {
+    backgroundColor: colors.successLight || '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  practiceWordsButtonCompact: {
+    backgroundColor: colors.warningLight || '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  doneButtonCompact: {
+    backgroundColor: colors.primary,
+  },
+  actionButtonTextCompact: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  doneButtonTextWhiteCompact: {
+    color: '#FFFFFF',
   },
 })

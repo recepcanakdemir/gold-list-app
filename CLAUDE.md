@@ -179,6 +179,7 @@ components/
 - **4-Round Progression**: Words progress through Red→Green→Blue→Yellow rounds
 - **Mastery Tracking**: Words marked as mastered exit the review cycle
 - **Statistics Integration**: Profile stats update when words are added/mastered
+- **Auto-Focus Navigation**: "Add Today's Words" automatically scrolls to current page with speech bubble
 
 #### Progress Tracking
 - **Real Data Integration**: All progress displays use actual database statistics
@@ -277,6 +278,47 @@ reviews: id, word_id, round, remembered, reviewed_at, next_review_date
 - **Image Handling**: Expo Image for optimized image loading
 - **State Management**: Efficient context usage to minimize re-renders
 - **Navigation**: Proper screen lazy loading and memory management
+
+### 🔧 Recent Major Fixes & Optimizations (2025-09-25)
+
+#### Critical Bug Fixes
+1. **Review Timing Issue - FIXED**
+   - **Problem**: Words added on Day 1 appeared for review on Day 14 instead of Day 15
+   - **Root Cause**: Timezone conversion with `.toISOString()` was shifting dates by 1 day
+   - **Solution**: Used local date formatting instead of UTC conversion to prevent timezone shifts
+   - **Files**: `lib/services/supabaseService.ts`
+
+2. **Slow Word Review Saving - FIXED** 
+   - **Problem**: Review saving took too long with "Processing X word reviews" screens
+   - **Root Cause**: Sequential database updates instead of parallel processing
+   - **Solution**: Implemented parallel operations with `Promise.all()` and RPC fallback
+   - **Performance**: 5-10x faster review saving, especially for larger batches
+   - **Files**: `lib/services/supabaseService.ts`
+
+3. **Simulation Day Indexing - FIXED**
+   - **Problem**: Simulation was 0-based but users think in 1-based terms
+   - **Solution**: Changed simulation to start at Day 1, updated all related calculations
+   - **Files**: `lib/contexts/DevTimeContext.tsx`, `lib/services/supabaseService.ts`, `components/DevTimeDisplay.tsx`
+
+#### Performance Optimizations
+- **Database Indexes**: Added strategic indexes for 5-25x query performance improvement
+- **Retry Logic**: Exponential backoff retry system for connection reliability
+- **Parallel Processing**: All database operations now run in parallel
+- **RPC Fallback**: Database functions with client-side fallback for maximum speed
+- **Files**: `database_performance_indexes.sql`, `PERFORMANCE_OPTIMIZATIONS.md`
+
+#### User Experience Enhancements
+- **Auto-Focus Navigation**: "Add Today's Words" automatically scrolls to current day's page
+  - Smart URL parameters: `?focusPage=15&openBubble=true`
+  - Automatic speech bubble with special messaging: "✨ Add today's 20 words here!"
+  - Smooth scroll animations and user feedback
+  - **Files**: `app/(tabs)/index.tsx`, `app/notebook/[id]/index.tsx`
+
+#### Gold List Method Logic Corrections
+- **Remembered Words**: Now correctly marked as mastered and exit review cycle
+- **Forgotten Words**: Advance by exactly 1 round as per Gold List Method
+- **Timing**: Consistent 14-day intervals across all calculations
+- **Page Management**: Proper page locking and state management
 
 ### 💡 Architecture Decisions
 

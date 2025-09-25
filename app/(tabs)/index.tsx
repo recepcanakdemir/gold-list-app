@@ -27,7 +27,7 @@ export default function HomeScreen() {
   const { profile } = useAuth()
   const { appState, refreshNotebooks } = useApp()
   const { colors } = useTheme()
-  const { registerDayChangeCallback } = useDevTime()
+  const { registerDayChangeCallback, currentSimulatedDay } = useDevTime()
   const [refreshing, setRefreshing] = useState(false)
   const [weekData, setWeekData] = useState([
     { day: 'Mon', words: 0, completed: false },
@@ -212,7 +212,13 @@ export default function HomeScreen() {
     
     // Priority 2: Words to add today
     if (!currentTodayProgress.completed) {
-      return { type: 'add_words', text: 'Add Today\'s Words', route: `/notebook/${notebook.id}` }
+      // Calculate current page number (simulation day = page number for 1-based indexing)
+      const currentPageNumber = currentSimulatedDay || 1
+      return { 
+        type: 'add_words', 
+        text: 'Add Today\'s Words', 
+        route: `/notebook/${notebook.id}?focusPage=${currentPageNumber}&openBubble=true` 
+      }
     }
     
     // Priority 3: All done for today
