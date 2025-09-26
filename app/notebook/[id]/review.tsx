@@ -1,28 +1,27 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, memo, useLayoutEffect } from 'react'
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Animated,
-  Alert,
-  Dimensions,
-  ScrollView,
-} from 'react-native'
-import Svg, { Circle } from 'react-native-svg'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { PanGestureHandler, State } from 'react-native-gesture-handler'
-import { useRouter, useLocalSearchParams } from 'expo-router'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
+import { useTheme } from '@/lib/contexts/ThemeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { ROUND_COLORS } from '@/lib/types/goldlist'
+import * as Haptics from 'expo-haptics'
+import { useLocalSearchParams, useRouter } from 'expo-router'
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  Alert,
+  Animated,
+  Dimensions,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native'
+import { PanGestureHandler, State } from 'react-native-gesture-handler'
+import { SafeAreaView } from 'react-native-safe-area-context'
+import Svg, { Circle } from 'react-native-svg'
 
 // Type aliases for cleaner code
 type WordWithReviews = any // Using any for now to avoid type conflicts
 type NotebookWithStats = any
-import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
-import { useTheme } from '@/lib/contexts/ThemeContext'
-import { useDevTime } from '@/lib/contexts/DevTimeContext'
-import * as Haptics from 'expo-haptics'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.2 // More responsive - 20% of screen width
@@ -62,6 +61,7 @@ export default function ReviewScreen() {
   const nextCardScale = useRef(new Animated.Value(0.95)).current
   const nextCardOpacity = useRef(new Animated.Value(0.8)).current
   const nextCardTranslateY = useRef(new Animated.Value(10)).current
+  
   
   // Refs for immediate visual state (no re-renders)
   const visualCurrentIndex = useRef(0)
@@ -170,7 +170,7 @@ export default function ReviewScreen() {
       if (router.canGoBack()) {
         router.back()
       } else {
-        router.push('/(tabs)/')
+        router.push('/(tabs)')
       }
     } finally {
       setLoading(false)
@@ -210,7 +210,7 @@ export default function ReviewScreen() {
     
     // Improved threshold detection - more sensitive to velocity
     const positionThreshold = SWIPE_THRESHOLD
-    const velocityThreshold = 800 // Increased for more intentional swipes
+    const velocityThreshold = 1000 // Increased for more intentional swipes
     const progress = Math.abs(translationX) / SCREEN_WIDTH
     
     const shouldSwipe = 
@@ -227,63 +227,60 @@ export default function ReviewScreen() {
     }
   }
 
+
   const resetCardPosition = () => {
     Animated.parallel([
       Animated.spring(currentCardTranslateX, { 
         toValue: 0, 
         useNativeDriver: true,
         tension: 150, // Increased tension for snappier return
-        friction: 10,
-        mass: 0.8 // Lower mass for quicker response
+        friction: 10
       }),
       Animated.spring(currentCardRotate, { 
         toValue: 0, 
         useNativeDriver: true,
         tension: 150,
-        friction: 10,
-        mass: 0.8
+        friction: 10
       }),
       Animated.spring(currentCardScale, { 
         toValue: 1, 
         useNativeDriver: true,
         tension: 150,
-        friction: 10,
-        mass: 0.8
+        friction: 10
       }),
       Animated.spring(currentCardOpacity, { 
         toValue: 1, 
         useNativeDriver: true,
         tension: 150,
-        friction: 10,
-        mass: 0.8
+        friction: 10
       }),
       // Reset next card to background position with matching physics
       Animated.spring(nextCardScale, { 
         toValue: 0.95, 
         useNativeDriver: true,
         tension: 150,
-        friction: 10,
-        mass: 0.8
+        friction: 10
       }),
       Animated.spring(nextCardOpacity, { 
         toValue: 0.8, 
         useNativeDriver: true,
         tension: 150,
-        friction: 10,
-        mass: 0.8
+        friction: 10
       }),
       Animated.spring(nextCardTranslateY, { 
         toValue: 10, 
         useNativeDriver: true,
         tension: 150,
-        friction: 10,
-        mass: 0.8
+        friction: 10
       }),
     ]).start()
   }
 
   const handleSwipe = async (direction: 'left' | 'right') => {
     const remembered = direction === 'right'
+    
+    // Reset meaning state immediately when swipe starts to prevent it affecting next card
+    setShowMeaning(false)
     
     // Haptic feedback
     if (remembered) {
@@ -345,7 +342,7 @@ export default function ReviewScreen() {
     const currentWord = words[visualCurrentIndex.current]
     
     try {
-      // Add to batch reviews for optimized processing
+      // Process word review
       const newBatchReviews = [...batchReviews, { wordId: currentWord.id, remembered }]
       setBatchReviews(newBatchReviews)
       batchReviewsRef.current = newBatchReviews
@@ -393,6 +390,15 @@ export default function ReviewScreen() {
   const resetAnimationsForNewCard = () => {
     // Reset animations immediately without triggering re-renders
     requestAnimationFrame(() => {
+      // Force stop any ongoing animations first
+      currentCardTranslateX.stopAnimation()
+      currentCardRotate.stopAnimation()
+      currentCardScale.stopAnimation()
+      currentCardOpacity.stopAnimation()
+      nextCardScale.stopAnimation()
+      nextCardOpacity.stopAnimation()
+      nextCardTranslateY.stopAnimation()
+      
       // Reset current card to ready state (the next card is now current)
       currentCardTranslateX.setValue(0)
       currentCardRotate.setValue(0)
@@ -417,6 +423,9 @@ export default function ReviewScreen() {
     forgotten: any[]
   }>({ remembered: [], forgotten: [] })
   const [showWordsList, setShowWordsList] = useState<'remembered' | 'forgotten' | null>(null)
+  
+  // Gesture timing for swipe detection
+  const gestureStartTime = useRef(0)
   
   // Animation values for completion screen
   const dashboardFadeAnim = useRef(new Animated.Value(0)).current
@@ -454,7 +463,10 @@ export default function ReviewScreen() {
     const remembered: any[] = []
     const forgotten: any[] = []
     
-    batchReviews.forEach(review => {
+    // Use the correct batch reviews array (prioritize ref over state for latest data)
+    const reviewsToUse = batchReviewsRef.current.length > 0 ? batchReviewsRef.current : batchReviews
+    
+    reviewsToUse.forEach(review => {
       const word = words.find(w => w.id === review.wordId)
       if (word) {
         if (review.remembered) {
@@ -486,8 +498,13 @@ export default function ReviewScreen() {
   }
 
   const handleCardTap = useCallback(() => {
-    setShowMeaning(!showMeaning)
+    console.log(`🎯 handleCardTap called - current showMeaning: ${showMeaning} -> ${!showMeaning}`)
+    
+    // Trigger haptic feedback
     Haptics.selectionAsync()
+    
+    // Simple toggle - no animation needed
+    setShowMeaning(!showMeaning)
   }, [showMeaning])
   
   // Memoized card components to prevent re-renders
@@ -499,8 +516,33 @@ export default function ReviewScreen() {
     <PanGestureHandler
       onGestureEvent={handleGesture}
       onHandlerStateChange={(event) => {
-        if (event.nativeEvent.state === State.END) {
-          handleGestureEnd(event)
+        const { state, translationX, translationY, velocityX, velocityY } = event.nativeEvent
+        
+        if (state === 1) { // State.BEGAN
+          gestureStartTime.current = Date.now()
+          console.log(`🟢 Gesture BEGAN (state ${state})`)
+        } else if (state === 2) { // State.ACTIVE
+          const gestureTime = Date.now() - gestureStartTime.current
+          const distance = Math.sqrt((translationX || 0) ** 2 + (translationY || 0) ** 2)
+          console.log(`🔄 ACTIVE state - time: ${gestureTime}ms, distance: ${distance.toFixed(1)}`)
+        } else if (state === 4) { // State.CANCELLED
+          console.log(`🚫 Gesture CANCELLED (state ${state}) - ignoring`)
+        } else if (state === 5) { // State.END
+          const gestureTime = Date.now() - gestureStartTime.current
+          const distance = Math.sqrt((translationX || 0) ** 2 + (translationY || 0) ** 2)
+          const velocity = Math.sqrt((velocityX || 0) ** 2 + (velocityY || 0) ** 2)
+          
+          console.log(`🔍 END state - time: ${gestureTime}ms, distance: ${distance.toFixed(1)}, velocity: ${velocity.toFixed(1)}`)
+          
+          // Only process real swipes
+          if (distance > 30 || velocity > 200) {
+            console.log(`👈👉 SWIPE detected - handling card swipe`)
+            handleGestureEnd(event)
+          } else {
+            console.log(`🚫 Small movement ignored - not a swipe`)
+          }
+        } else {
+          console.log(`❓ Unknown gesture state: ${state}`)
         }
       }}
     >
@@ -510,7 +552,7 @@ export default function ReviewScreen() {
           styles.currentCard,
           {
             borderColor: roundColors.primary,
-            backgroundColor: roundColors.light,
+            backgroundColor: showMeaning ? '#f0f0f0' : roundColors.light,
             transform: [
               { translateX: currentCardTranslateX },
               { rotate: currentCardRotate.interpolate({
@@ -524,7 +566,7 @@ export default function ReviewScreen() {
           }
         ]}
       >
-        <TouchableOpacity style={styles.cardContent} onPress={handleCardTap} activeOpacity={0.8}>
+        <View style={styles.cardContent}>
           {/* Word side */}
           {!showMeaning && (
             <View style={styles.cardSide}>
@@ -532,7 +574,7 @@ export default function ReviewScreen() {
               {word.notes && (
                 <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
               )}
-              <Text style={[styles.tapHint, { color: '#000000' }]}>Tap to reveal meaning</Text>
+              <Text style={[styles.tapHint, { color: '#000000' }]}>Use reveal button below</Text>
             </View>
           )}
 
@@ -547,7 +589,7 @@ export default function ReviewScreen() {
               <Text style={[styles.swipeHint, { color: '#000000' }]}>Swipe or use buttons below</Text>
             </View>
           )}
-        </TouchableOpacity>
+        </View>
 
         {/* Swipe indicators */}
         <Animated.View
@@ -669,7 +711,7 @@ export default function ReviewScreen() {
       if (router.canGoBack()) {
         router.back()
       } else {
-        router.push('/(tabs)/')
+        router.push('/(tabs)')
       }
     }, 50)
   }
@@ -1066,7 +1108,6 @@ export default function ReviewScreen() {
         {/* Next card (background) - Pre-loaded and ready */}
         {nextWord && (
           <NextCard 
-            key={`next-${nextWord.id}`}
             word={nextWord} 
             roundColors={nextRoundColors} 
           />
@@ -1075,7 +1116,6 @@ export default function ReviewScreen() {
         {/* Current card (top) - Fully interactive */}
         {currentWord ? (
           <CurrentCard 
-            key={`current-${currentWord.id}`}
             word={currentWord} 
             roundColors={roundColors} 
             showMeaning={showMeaning} 
@@ -1572,7 +1612,7 @@ const createStyles = (colors: any) => StyleSheet.create({
   actionButtonsContainer: {
     gap: 12,
   },
-  actionButton: {
+  dashboardActionButton: {
     paddingVertical: 16,
     paddingHorizontal: 20,
     borderRadius: 12,
@@ -1596,7 +1636,7 @@ const createStyles = (colors: any) => StyleSheet.create({
   doneMainButton: {
     backgroundColor: colors.primary,
   },
-  actionButtonText: {
+  dashboardActionButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: colors.textPrimary,
