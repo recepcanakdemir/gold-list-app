@@ -1415,7 +1415,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
   },
   cardContainer: {
-    flex: 1,
+    height: SCREEN_HEIGHT - 350,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -1541,6 +1541,8 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 20,
     gap: 16,
+    marginBottom: 20,
+    zIndex: 1000,
   },
   actionButton: {
     flex: 1,
@@ -1555,6 +1557,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+    zIndex: 1001,
   },
   forgotButton: {
     backgroundColor: '#fee2e2',
