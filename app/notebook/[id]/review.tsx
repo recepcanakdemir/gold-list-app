@@ -1040,7 +1040,6 @@ export default function ReviewScreen() {
                         {roundStat.accuracy}%
                       </Text>
                       <Text style={styles.roundProgressLabelLarge}>R{roundStat.round}</Text>
-                      <Text style={styles.roundProgressCountLarge}>{roundStat.remembered}/{roundStat.total}</Text>
                     </View>
                   </View>
                 </Animated.View>
@@ -1275,6 +1274,12 @@ export default function ReviewScreen() {
         )}
       </View>
 
+      {/* Instructions */}
+      <View style={styles.instructions}>
+        <Text style={styles.instructionText}>
+          Swipe right if you remembered • Swipe left if you forgot
+        </Text>
+      </View>
       {/* Action Buttons */}
       <View style={styles.actionButtons}>
         <TouchableOpacity
@@ -1307,12 +1312,6 @@ export default function ReviewScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Instructions */}
-      <View style={styles.instructions}>
-        <Text style={styles.instructionText}>
-          Swipe right if you remembered • Swipe left if you forgot
-        </Text>
-      </View>
     </SafeAreaView>
   )
 }
@@ -1415,7 +1414,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
   },
   cardContainer: {
-    height: SCREEN_HEIGHT - 350,
+    height: SCREEN_HEIGHT - 390,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -1579,7 +1578,6 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   instructions: {
     paddingHorizontal: 20,
-    paddingBottom: 20,
   },
   instructionText: {
     fontSize: 14,
