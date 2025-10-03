@@ -181,7 +181,7 @@ export default function NotificationsScreen() {
             <Text style={styles.emptyIcon}>🔔</Text>
             <Text style={styles.emptyTitle}>No notifications yet</Text>
             <Text style={styles.emptyMessage}>
-              We'll notify you about your learning progress and achievements.
+              We&apos;ll notify you about your learning progress and achievements.
             </Text>
           </View>
         )}

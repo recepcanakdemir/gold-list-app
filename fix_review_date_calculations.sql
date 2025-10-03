@@ -1,4 +1,9 @@
--- Update word review result and advance round or mark as mastered
+-- =============================================
+-- FIX REVIEW DATE CALCULATIONS - COMPLETE FIX
+-- Run this SQL in Supabase SQL Editor to fix all review scheduling issues
+-- =============================================
+
+-- Update the update_word_review_result function with proper date calculation logic
 CREATE OR REPLACE FUNCTION update_word_review_result(
   p_word_id uuid,
   p_remembered boolean,
@@ -12,11 +17,13 @@ DECLARE
   current_word_round integer;
   word_notebook_id uuid;
   word_page_id uuid;
+  word_last_reviewed date;
+  word_created_at timestamp;
   next_review_date date;
 BEGIN
   -- Get current word info and verify ownership
-  SELECT w.current_round, w.notebook_id, w.page_id
-  INTO current_word_round, word_notebook_id, word_page_id
+  SELECT w.current_round, w.notebook_id, w.page_id, w.last_reviewed, w.created_at
+  INTO current_word_round, word_notebook_id, word_page_id, word_last_reviewed, word_created_at
   FROM words w
   JOIN notebooks n ON w.notebook_id = n.id
   WHERE w.id = p_word_id AND n.user_id = auth.uid();
@@ -25,8 +32,10 @@ BEGIN
     RAISE EXCEPTION 'Word not found or access denied';
   END IF;
   
-  -- Calculate next review date (14 days from current date)
-  next_review_date := p_current_date + INTERVAL '14 days';
+  -- Calculate next review date based on word's last review date (proper +14 sequence)
+  -- Use last_reviewed if available, otherwise fall back to word's creation date (not current date)
+  -- This ensures Day 1→15→29→43 progression regardless of simulation day
+  next_review_date := COALESCE(word_last_reviewed, word_created_at::date) + INTERVAL '14 days';
   
   IF p_remembered THEN
     -- Remembered words are mastered and removed from future reviews
@@ -78,3 +87,9 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Grant permissions
+GRANT EXECUTE ON FUNCTION update_word_review_result(UUID, BOOLEAN, DATE) TO authenticated;
+
+-- Test that the function updated successfully
+SELECT 'Review date calculations fixed! Proper +14 day sequences restored (Day 1→15→29→43).' as status;

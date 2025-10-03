@@ -2,9 +2,10 @@ import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { ROUND_COLORS } from '@/lib/types/goldlist'
+import { getBadgeInfo } from '@/lib/utils/badgeUtils'
 import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
@@ -15,7 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { PanGestureHandler, State } from 'react-native-gesture-handler'
+import Swiper from 'react-native-deck-swiper'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 
@@ -35,7 +36,10 @@ export default function ReviewScreen() {
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [words, setWords] = useState<WordWithReviews[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
-  const [showMeaning, setShowMeaning] = useState(false)
+  const [revealedCards, setRevealedCards] = useState<Map<string, boolean>>(new Map())
+
+  // Swiper ref for deck swiper
+  const swiperRef = useRef<Swiper<WordWithReviews>>(null)
   
   const [reviewedWords, setReviewedWords] = useState<{
     remembered: number
@@ -49,8 +53,17 @@ export default function ReviewScreen() {
   const [batchReviews, setBatchReviews] = useState<Array<{ wordId: string; remembered: boolean }>>([])
   const [isProcessingBatch, setIsProcessingBatch] = useState(false)
   const batchReviewsRef = useRef<Array<{ wordId: string; remembered: boolean }>>([])
+  const originalWordsRef = useRef<WordWithReviews[]>([])
   
   // Note: batchReviewsRef is manually kept in sync with batchReviews state
+  
+  // Capture original words when they're first loaded
+  useEffect(() => {
+    if (words.length > 0 && originalWordsRef.current.length === 0) {
+      originalWordsRef.current = [...words]
+      console.log(`📚 Captured ${words.length} original words for completion screen`)
+    }
+  }, [words])
 
   // Animation values for card deck - each card has independent animations
   const currentCardTranslateX = useRef(new Animated.Value(0)).current
@@ -84,7 +97,7 @@ export default function ReviewScreen() {
     loadReviewData()
   }, [id, round, page])
 
-  // Process pending batch reviews when component unmounts
+  // Process pending batch reviews when component unmounts (only on true unmount)
   useEffect(() => {
     return () => {
       // Cleanup function - only process if there are pending reviews from early exit
@@ -95,7 +108,7 @@ export default function ReviewScreen() {
         })
       }
     }
-  }, [words]) // Include words in dependency to capture latest word list
+  }, []) // Empty dependency - only run on mount/unmount
   
   // Initialize visual refs
   useEffect(() => {
@@ -276,11 +289,58 @@ export default function ReviewScreen() {
     ]).start()
   }
 
+  // Add swiper handlers for deck swiper
+  const handleSwipedLeft = useCallback((cardIndex: number) => {
+    console.log(`👈 Card swiped left at index: ${cardIndex}`)
+    // Get the current word directly from the swiper ref
+    const currentWord = swiperRef.current?.props.cards?.[cardIndex]
+    if (currentWord) {
+      console.log(`🔍 Found word from swiper: "${currentWord.word}" (ID: ${currentWord.id})`)
+      completeCardTransitionWithWord(false, cardIndex, currentWord)
+    } else {
+      console.error(`❌ No word found in swiper at index ${cardIndex}`)
+    }
+  }, [])
+
+  const handleSwipedRight = useCallback((cardIndex: number) => {
+    console.log(`👉 Card swiped right at index: ${cardIndex}`)
+    // Get the current word directly from the swiper ref
+    const currentWord = swiperRef.current?.props.cards?.[cardIndex]
+    if (currentWord) {
+      console.log(`🔍 Found word from swiper: "${currentWord.word}" (ID: ${currentWord.id})`)
+      completeCardTransitionWithWord(true, cardIndex, currentWord)
+    } else {
+      console.error(`❌ No word found in swiper at index ${cardIndex}`)
+    }
+  }, [])
+
+  const handleSwiped = useCallback((cardIndex: number) => {
+    console.log(`📋 Card swiped at index: ${cardIndex} (index tracking handled by completeCardTransition)`)
+    // Note: Index updating is handled in completeCardTransition to avoid race conditions
+  }, [])
+
+  const handleRevealPress = useCallback(() => {
+    // Get the current word from the swiper (not from stale closure)
+    const currentWord = swiperRef.current?.props.cards?.[currentIndex]
+    if (!currentWord) {
+      console.log(`❌ No current word found at index ${currentIndex}`)
+      return
+    }
+    
+    console.log(`👁️ [REVEAL] Toggling reveal for word: "${currentWord.word}" (ID: ${currentWord.id})`)
+    
+    setRevealedCards(prev => {
+      const newMap = new Map(prev)
+      const currentRevealed = newMap.get(currentWord.id) || false
+      const newRevealed = !currentRevealed
+      newMap.set(currentWord.id, newRevealed)
+      console.log(`👁️ [REVEAL] Word "${currentWord.word}" reveal state: ${currentRevealed} → ${newRevealed}`)
+      return newMap
+    })
+  }, [currentIndex])
+
   const handleSwipe = async (direction: 'left' | 'right') => {
     const remembered = direction === 'right'
-    
-    // Reset meaning state immediately when swipe starts to prevent it affecting next card
-    setShowMeaning(false)
     
     // Haptic feedback
     if (remembered) {
@@ -338,8 +398,75 @@ export default function ReviewScreen() {
     await completeCardTransition(remembered)
   }
 
-  const completeCardTransition = async (remembered: boolean) => {
-    const currentWord = words[visualCurrentIndex.current]
+  const completeCardTransitionWithWord = async (remembered: boolean, cardIndex: number, currentWord: WordWithReviews) => {
+    console.log(`🔍 CompleteCardTransitionWithWord - cardIndex: ${cardIndex}, word: "${currentWord.word}"`)
+    
+    // Get the total number of words from the swiper (not from stale closure)
+    const totalWords = swiperRef.current?.props.cards?.length || 0
+    console.log(`📊 Total words in swiper: ${totalWords}, current cardIndex: ${cardIndex}`)
+    
+    try {
+      // Process word review - use ref to get current batch state
+      const currentBatch = batchReviewsRef.current || []
+      const newBatchReviews = [...currentBatch, { wordId: currentWord.id, remembered }]
+      setBatchReviews(newBatchReviews)
+      batchReviewsRef.current = newBatchReviews
+      
+      console.log(`📝 Added review for word "${currentWord.word}": ${remembered ? 'remembered' : 'forgotten'}`)
+      console.log(`📊 Batch now contains ${newBatchReviews.length} reviews:`, newBatchReviews.map(r => r.wordId))
+      
+      // Update refs immediately for UI feedback (optimistic update)
+      visualStats.current = {
+        remembered: visualStats.current.remembered + (remembered ? 1 : 0),
+        forgotten: visualStats.current.forgotten + (remembered ? 0 : 1),
+        total: visualStats.current.total + 1,
+      }
+      
+      // Check if there are more cards to review
+      if (cardIndex < totalWords - 1) {
+        console.log(`➡️ Moving to next card: ${cardIndex + 1}/${totalWords}`)
+        const nextIndex = cardIndex + 1
+        visualCurrentIndex.current = nextIndex
+        
+        // Batch all React state updates together (single re-render)
+        React.startTransition(() => {
+          setCurrentIndex(nextIndex)
+          setReviewedWords({ ...visualStats.current })
+        })
+        
+        resetAnimationsForNewCard()
+      } else {
+        // Review session complete - hide all cards first
+        console.log(`🏁 Review session complete! Reviewed ${cardIndex + 1}/${totalWords} words`)
+        React.startTransition(() => {
+          setCurrentIndex(cardIndex + 1)
+          setReviewedWords({ ...visualStats.current })
+        })
+        
+        // Small delay to complete card exit animation, then show completion screen
+        setTimeout(() => {
+          completeReviewSession()
+        }, 300)
+      }
+    } catch (error) {
+      console.error('Review processing error:', error)
+      Alert.alert('Error', `Failed to process review: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
+  const completeCardTransition = async (remembered: boolean, cardIndex?: number) => {
+    // Use cardIndex if provided (from swiper), otherwise use currentIndex
+    const wordIndex = cardIndex !== undefined ? cardIndex : currentIndex
+    const currentWord = words[wordIndex]
+    
+    console.log(`🔍 CompleteCardTransition - currentIndex: ${currentIndex}, cardIndex: ${cardIndex}, wordIndex: ${wordIndex}`)
+    console.log(`🔍 Current word:`, currentWord?.word || 'undefined')
+    console.log(`🔍 Words array length: ${words.length}, first few words:`, words.slice(0, 3).map(w => w.word))
+    
+    if (!currentWord) {
+      console.error(`❌ No word found at index ${wordIndex}`)
+      return
+    }
     
     try {
       // Process word review
@@ -357,21 +484,21 @@ export default function ReviewScreen() {
         total: visualStats.current.total + 1,
       }
       
-      if (visualCurrentIndex.current < words.length - 1) {
-        visualCurrentIndex.current += 1
+      if (wordIndex < words.length - 1) {
+        const nextIndex = wordIndex + 1
+        visualCurrentIndex.current = nextIndex
         
         // Batch all React state updates together (single re-render)
         React.startTransition(() => {
-          setCurrentIndex(visualCurrentIndex.current)
+          setCurrentIndex(nextIndex)
           setReviewedWords({ ...visualStats.current })
-          setShowMeaning(false)
         })
         
         resetAnimationsForNewCard()
       } else {
         // Review session complete - hide all cards first
         React.startTransition(() => {
-          setCurrentIndex(visualCurrentIndex.current)
+          setCurrentIndex(wordIndex + 1)
           setReviewedWords({ ...visualStats.current })
         })
         
@@ -459,23 +586,32 @@ export default function ReviewScreen() {
       console.log('⚠️ No batch reviews to process - all words may have been processed individually')
     }
 
-    // Collect words by result for the completion screen
+    // Collect words by result for the completion screen AFTER batch processing
     const remembered: any[] = []
     const forgotten: any[] = []
     
-    // Use the correct batch reviews array (prioritize ref over state for latest data)
-    const reviewsToUse = batchReviewsRef.current.length > 0 ? batchReviewsRef.current : batchReviews
+    // Use the processed reviews (reviewsToProcess) instead of cleared arrays
+    const reviewsToUse = reviewsToProcess
+    
+    // Get words from captured original words array (both words state and swiper may be cleared by this point)
+    const swiperWords = originalWordsRef.current
+    console.log(`📊 Building review results from ${reviewsToUse.length} reviews and ${swiperWords.length} words`)
     
     reviewsToUse.forEach(review => {
-      const word = words.find(w => w.id === review.wordId)
+      const word = swiperWords.find(w => w.id === review.wordId)
       if (word) {
+        console.log(`📊 Found word "${word.word}" (Round ${word.current_round}) - ${review.remembered ? 'remembered' : 'forgotten'}`)
         if (review.remembered) {
           remembered.push(word)
         } else {
           forgotten.push(word)
         }
+      } else {
+        console.warn(`⚠️ Word not found for review: ${review.wordId}`)
       }
     })
+    
+    console.log(`📊 Final review results - Remembered: ${remembered.length}, Forgotten: ${forgotten.length}`)
     
     setReviewResults({ remembered, forgotten })
     
@@ -497,198 +633,134 @@ export default function ReviewScreen() {
     ]).start()
   }
 
-  const handleCardTap = useCallback(() => {
-    console.log(`🎯 handleCardTap called - current showMeaning: ${showMeaning} -> ${!showMeaning}`)
+  // Animated values for reveal transitions
+  const revealAnimationRef = useRef(new Map<string, Animated.Value>()).current
+
+  const getRevealAnimation = useCallback((wordId: string) => {
+    if (!revealAnimationRef.has(wordId)) {
+      revealAnimationRef.set(wordId, new Animated.Value(0))
+    }
+    return revealAnimationRef.get(wordId)!
+  }, [revealAnimationRef])
+
+  // Handle reveal animation when revealedCards state changes
+  useEffect(() => {
+    revealedCards.forEach((isRevealed, wordId) => {
+      const animation = getRevealAnimation(wordId)
+      Animated.timing(animation, {
+        toValue: isRevealed ? 1 : 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start()
+    })
+  }, [revealedCards, getRevealAnimation])
+
+  // Simple card renderer for deck swiper - Pre-renders both states with animated opacity control
+  const renderCard = useCallback((word: WordWithReviews, index: number) => {
+    if (!word) return null
+
+    const roundColors = wordColorsMap.get(word.id) || ROUND_COLORS[1]
+    const badgeInfo = getBadgeInfo(word.current_round)
+    const isRevealed = revealedCards.get(word.id) || false
+    const revealAnimation = getRevealAnimation(word.id)
     
-    // Trigger haptic feedback
-    Haptics.selectionAsync()
-    
-    // Simple toggle - no animation needed
-    setShowMeaning(!showMeaning)
-  }, [showMeaning])
-  
-  // Memoized card components to prevent re-renders
-  const CurrentCard = memo(({ word, roundColors, showMeaning }: { 
-    word: WordWithReviews, 
-    roundColors: any, 
-    showMeaning: boolean 
-  }) => (
-    <PanGestureHandler
-      onGestureEvent={handleGesture}
-      onHandlerStateChange={(event) => {
-        const { state, translationX, translationY, velocityX, velocityY } = event.nativeEvent
-        
-        if (state === 1) { // State.BEGAN
-          gestureStartTime.current = Date.now()
-          console.log(`🟢 Gesture BEGAN (state ${state})`)
-        } else if (state === 2) { // State.ACTIVE
-          const gestureTime = Date.now() - gestureStartTime.current
-          const distance = Math.sqrt((translationX || 0) ** 2 + (translationY || 0) ** 2)
-          console.log(`🔄 ACTIVE state - time: ${gestureTime}ms, distance: ${distance.toFixed(1)}`)
-        } else if (state === 4) { // State.CANCELLED
-          console.log(`🚫 Gesture CANCELLED (state ${state}) - ignoring`)
-        } else if (state === 5) { // State.END
-          const gestureTime = Date.now() - gestureStartTime.current
-          const distance = Math.sqrt((translationX || 0) ** 2 + (translationY || 0) ** 2)
-          const velocity = Math.sqrt((velocityX || 0) ** 2 + (velocityY || 0) ** 2)
-          
-          console.log(`🔍 END state - time: ${gestureTime}ms, distance: ${distance.toFixed(1)}, velocity: ${velocity.toFixed(1)}`)
-          
-          // Only process real swipes
-          if (distance > 30 || velocity > 200) {
-            console.log(`👈👉 SWIPE detected - handling card swipe`)
-            handleGestureEnd(event)
-          } else {
-            console.log(`🚫 Small movement ignored - not a swipe`)
-          }
-        } else {
-          console.log(`❓ Unknown gesture state: ${state}`)
-        }
-      }}
-    >
-      <Animated.View
+    console.log(`🎨 [RENDER] Card "${word.word}" (ID: ${word.id}) - isRevealed: ${isRevealed}`)
+
+    return (
+      <View
         style={[
           styles.card,
           styles.currentCard,
           {
             borderColor: roundColors.primary,
-            backgroundColor: showMeaning ? '#f0f0f0' : roundColors.light,
-            transform: [
-              { translateX: currentCardTranslateX },
-              { rotate: currentCardRotate.interpolate({
-                inputRange: [-30, 30],
-                outputRange: ['-30deg', '30deg']
-              }) },
-              { scale: currentCardScale }
-            ],
-            opacity: currentCardOpacity,
-            zIndex: 2
+            backgroundColor: roundColors.light,
           }
         ]}
       >
         <View style={styles.cardContent}>
-          {/* Word side */}
-          {!showMeaning && (
-            <View style={styles.cardSide}>
+          {/* Badge indicator */}
+          <View style={[styles.badgeIndicator, {
+            backgroundColor: badgeInfo.badgeColor
+          }]}>
+            <Text style={[styles.badgeText, { color: '#333' }]}>
+              {badgeInfo.badgeEmoji}
+            </Text>
+          </View>
+          
+          {/* Pre-render both word and meaning with animated opacity control */}
+          <View style={styles.cardSide}>
+            {/* Word content - Always rendered, controlled by animated opacity */}
+            <Animated.View style={[
+              styles.cardContentLayer,
+              { 
+                opacity: revealAnimation.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 0],
+                }),
+                transform: [{
+                  scale: revealAnimation.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, 0.95],
+                  })
+                }],
+              }
+            ]}>
               <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
               {word.notes && (
                 <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
               )}
-              <Text style={[styles.tapHint, { color: '#000000' }]}>Use reveal button below</Text>
-            </View>
-          )}
-
-          {/* Meaning side */}
-          {showMeaning && (
-            <View style={styles.cardSide}>
+              <Text style={[styles.tapHint, { color: '#000000' }]}>
+                Use reveal button to show meaning
+              </Text>
+            </Animated.View>
+            
+            {/* Meaning content - Always rendered, controlled by animated opacity */}
+            <Animated.View style={[
+              styles.cardContentLayer,
+              { 
+                opacity: revealAnimation.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 1],
+                }),
+                transform: [{
+                  scale: revealAnimation.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.95, 1],
+                  })
+                }],
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+              }
+            ]}>
               <Text style={[styles.cardMeaning, { color: '#000000' }]}>{word.meaning}</Text>
               <Text style={[styles.cardOriginal, { color: '#000000' }]}>{word.word}</Text>
               {word.notes && (
                 <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
               )}
               <Text style={[styles.swipeHint, { color: '#000000' }]}>Swipe or use buttons below</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Swipe indicators */}
-        <Animated.View
-          style={[
-            styles.swipeIndicator,
-            styles.leftIndicator,
-            {
-              opacity: currentCardTranslateX.interpolate({
-                inputRange: [-SCREEN_WIDTH, -80, 0],
-                outputRange: [1, 0.9, 0],
-                extrapolate: 'clamp'
-              }),
-              transform: [{
-                scale: currentCardTranslateX.interpolate({
-                  inputRange: [-SCREEN_WIDTH, -80, 0],
-                  outputRange: [1.2, 1.1, 0.8],
-                  extrapolate: 'clamp'
-                })
-              }]
-            }
-          ]}
-        >
-          <Text style={[styles.indicatorText, styles.forgotText]}>❌ FORGOT</Text>
-        </Animated.View>
-
-        <Animated.View
-          style={[
-            styles.swipeIndicator,
-            styles.rightIndicator,
-            {
-              opacity: currentCardTranslateX.interpolate({
-                inputRange: [0, 80, SCREEN_WIDTH],
-                outputRange: [0, 0.9, 1],
-                extrapolate: 'clamp'
-              }),
-              transform: [{
-                scale: currentCardTranslateX.interpolate({
-                  inputRange: [0, 80, SCREEN_WIDTH],
-                  outputRange: [0.8, 1.1, 1.2],
-                  extrapolate: 'clamp'
-                })
-              }]
-            }
-          ]}
-        >
-          <Text style={[styles.indicatorText, styles.rememberedText]}>✅ REMEMBERED</Text>
-        </Animated.View>
-      </Animated.View>
-    </PanGestureHandler>
-  ), (prevProps, nextProps) => {
-    // Only re-render if word ID, round colors, or showMeaning actually change
-    return prevProps.word.id === nextProps.word.id && 
-           prevProps.roundColors.primary === nextProps.roundColors.primary &&
-           prevProps.showMeaning === nextProps.showMeaning
-  })
-
-  const NextCard = memo(({ word, roundColors }: { 
-    word: WordWithReviews, 
-    roundColors: any 
-  }) => (
-    <Animated.View
-      style={[
-        styles.card,
-        styles.nextCard,
-        {
-          borderColor: roundColors.primary,
-          backgroundColor: roundColors.light,
-          transform: [
-            { scale: nextCardScale },
-            { translateY: nextCardTranslateY }
-          ],
-          opacity: nextCardOpacity,
-          zIndex: 1
-        }
-      ]}
-    >
-      <View style={styles.cardContent}>
-        <View style={styles.cardSide}>
-          <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
-          {word.notes && (
-            <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
-          )}
-          <Text style={[styles.tapHint, { color: '#000000' }]}>Tap to reveal meaning</Text>
+            </Animated.View>
+          </View>
         </View>
       </View>
-    </Animated.View>
-  ), (prevProps, nextProps) => {
-    // Only re-render if word ID or round colors actually change
-    return prevProps.word.id === nextProps.word.id && 
-           prevProps.roundColors.primary === nextProps.roundColors.primary
-  })
+    )
+  }, [revealedCards, wordColorsMap, styles, getRevealAnimation])
+  
+  
 
   const handleButtonPress = (remembered: boolean) => {
-    handleSwipe(remembered ? 'right' : 'left')
+    if (remembered) {
+      swiperRef.current?.swipeRight()
+    } else {
+      swiperRef.current?.swipeLeft()
+    }
   }
 
   const resetReviewSession = () => {
     setCurrentIndex(0)
-    setShowMeaning(false)
+    setRevealedCards(new Map())
     setReviewedWords({ remembered: 0, forgotten: 0, total: 0 })
     setBatchReviews([])
     batchReviewsRef.current = []
@@ -822,11 +894,20 @@ export default function ReviewScreen() {
     const accuracy = finalStats.total > 0 ? Math.round((finalStats.remembered / finalStats.total) * 100) : 0
 
     // Calculate round distribution
+    console.log(`🎯 Calculating round stats from reviewResults:`)
+    console.log(`🎯 Total remembered: ${reviewResults.remembered.length}, Total forgotten: ${reviewResults.forgotten.length}`)
+    console.log(`🎯 Remembered words:`, reviewResults.remembered.map(w => `${w.word} (R${w.current_round || 'undefined'})`))
+    console.log(`🎯 Forgotten words:`, reviewResults.forgotten.map(w => `${w.word} (R${w.current_round || 'undefined'})`))
+    console.log(`🎯 Sample word object:`, reviewResults.remembered[0] || reviewResults.forgotten[0])
+    
     const roundStats = [1, 2, 3, 4].map(round => {
-      const roundWords = reviewResults.remembered.concat(reviewResults.forgotten).filter(w => w.current_round === round)
+      const allWords = reviewResults.remembered.concat(reviewResults.forgotten)
+      console.log(`🎯 Round ${round} - Checking ${allWords.length} total words`)
+      const roundWords = allWords.filter(w => w.current_round === round)
+      console.log(`🎯 Round ${round} - Found ${roundWords.length} words: ${roundWords.map(w => w.word).join(', ')}`)
       const remembered = reviewResults.remembered.filter(w => w.current_round === round).length
       const total = roundWords.length
-      return {
+      const result = {
         round,
         total,
         remembered,
@@ -834,7 +915,11 @@ export default function ReviewScreen() {
         accuracy: total > 0 ? Math.round((remembered / total) * 100) : 0,
         colors: ROUND_COLORS[round as keyof typeof ROUND_COLORS]
       }
+      console.log(`🎯 Round ${round} stats:`, result)
+      return result
     }).filter(r => r.total > 0)
+    
+    console.log(`🎯 Final roundStats after filtering:`, roundStats)
 
     return (
       <SafeAreaView style={styles.container}>
@@ -904,7 +989,11 @@ export default function ReviewScreen() {
 
             {/* Round Progress Circles */}
             <View style={styles.roundProgressContainer}>
-              {roundStats.map((roundStat, index) => (
+              {(() => {
+                console.log(`🎯 Rendering round progress circles - roundStats.length: ${roundStats.length}`)
+                return roundStats.map((roundStat, index) => {
+                  console.log(`🎯 Rendering round ${roundStat.round} with ${roundStat.total} words`)
+                  return (
                 <Animated.View 
                   key={roundStat.round}
                   style={[
@@ -955,7 +1044,9 @@ export default function ReviewScreen() {
                     </View>
                   </View>
                 </Animated.View>
-              ))}
+                  )
+                })
+              })()}
             </View>
           </Animated.View>
 
@@ -1081,7 +1172,7 @@ export default function ReviewScreen() {
         </View>
 
         <View style={[styles.roundBadge, { backgroundColor: roundColors.primary }]}>
-          <Text style={styles.roundBadgeText}>R{currentWord.current_round}</Text>
+          <Text style={styles.roundBadgeText}>R{currentWord?.current_round || 1}</Text>
         </View>
       </View>
 
@@ -1103,31 +1194,81 @@ export default function ReviewScreen() {
         </View>
       </View>
 
-      {/* Card Deck Stack */}
+      {/* Card Deck Stack - Deck Swiper System */}
       <View style={styles.cardContainer}>
-        {/* Next card (background) - Pre-loaded and ready */}
-        {nextWord && (
-          <NextCard 
-            word={nextWord} 
-            roundColors={nextRoundColors} 
-          />
-        )}
-
-        {/* Current card (top) - Fully interactive */}
-        {currentWord ? (
-          <CurrentCard 
-            word={currentWord} 
-            roundColors={roundColors} 
-            showMeaning={showMeaning} 
+        {words.length > 0 ? (
+          <Swiper
+            ref={swiperRef}
+            cards={words}
+            renderCard={renderCard}
+            onSwipedLeft={handleSwipedLeft}
+            onSwipedRight={handleSwipedRight}
+            onSwiped={handleSwiped}
+            cardIndex={0}
+            backgroundColor={'transparent'}
+            stackSize={2}
+            stackSeparation={15}
+            disableTopSwipe={true}
+            disableBottomSwipe={true}
+            verticalSwipe={false}
+            horizontalSwipe={true}
+            cardHorizontalMargin={10}
+            cardVerticalMargin={0}
+            overlayLabels={{
+              left: {
+                title: '❌ FORGOT',
+                style: {
+                  label: {
+                    backgroundColor: '#ef4444',
+                    borderColor: '#ef4444',
+                    color: 'white',
+                    borderWidth: 1,
+                    fontSize: 24,
+                    fontWeight: 'bold',
+                    borderRadius: 10,
+                    textAlign: 'center',
+                  },
+                  wrapper: {
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    justifyContent: 'flex-start',
+                    marginTop: 20,
+                    marginLeft: -20,
+                  }
+                }
+              },
+              right: {
+                title: '✅ REMEMBERED',
+                style: {
+                  label: {
+                    backgroundColor: '#22c55e',
+                    borderColor: '#22c55e',
+                    color: 'white',
+                    borderWidth: 1,
+                    fontSize: 24,
+                    fontWeight: 'bold',
+                    borderRadius: 10,
+                    textAlign: 'center',
+                  },
+                  wrapper: {
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    justifyContent: 'flex-start',
+                    marginTop: 20,
+                    marginLeft: 20,
+                  }
+                }
+              }
+            }}
+            animateOverlayLabelsOpacity
+            animateCardOpacity
+            swipeBackCard
           />
         ) : (
-          <View style={[styles.card, styles.currentCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+          <View style={[styles.card, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
             <View style={styles.cardContent}>
               <Text style={[styles.cardWord, { color: colors.textPrimary }]}>
                 {words.length === 0 ? 'No words available for review' : 'Loading word...'}
-              </Text>
-              <Text style={[styles.cardNotes, { color: colors.textSecondary }]}>
-                Debug: {words.length} words total, index {displayIndex}
               </Text>
             </View>
           </View>
@@ -1146,11 +1287,14 @@ export default function ReviewScreen() {
 
         <TouchableOpacity
           style={[styles.actionButton, styles.revealButton]}
-          onPress={handleCardTap}
+          onPress={handleRevealPress}
         >
           <Text style={styles.actionButtonIcon}>👁️</Text>
           <Text style={styles.actionButtonText}>
-            {showMeaning ? 'Hide' : 'Reveal'}
+            {(() => {
+              const currentWord = swiperRef.current?.props.cards?.[currentIndex]
+              return currentWord && revealedCards.get(currentWord.id) ? 'Hide' : 'Reveal'
+            })()}
           </Text>
         </TouchableOpacity>
 
@@ -1277,7 +1421,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingHorizontal: 20,
   },
   card: {
-    width: SCREEN_WIDTH - 40,
+    width: SCREEN_WIDTH-20,
     height: SCREEN_HEIGHT * 0.5,
     backgroundColor: colors.cardBackground, // Default background, will be overridden inline
     borderRadius: 20,
@@ -1292,16 +1436,10 @@ const createStyles = (colors: any) => StyleSheet.create({
     elevation: 8,
   },
   nextCard: {
-    position: 'absolute',
-    top: 0,
-    left: 20, // Match cardContainer padding
-    right: 20,
+    // Remove absolute positioning for swiper cards
   },
   currentCard: {
-    position: 'absolute',
-    top: 0,
-    left: 20, // Match cardContainer padding
-    right: 20,
+    // Remove absolute positioning for swiper cards  
   },
   cardContent: {
     flex: 1,
@@ -1310,6 +1448,12 @@ const createStyles = (colors: any) => StyleSheet.create({
     alignItems: 'center',
   },
   cardSide: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
+  cardContentLayer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1877,5 +2021,26 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   doneButtonTextWhiteCompact: {
     color: '#FFFFFF',
+  },
+  
+  // Badge and content layer styles for reveal functionality
+  badgeIndicator: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  badgeText: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 })

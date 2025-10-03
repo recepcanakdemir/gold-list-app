@@ -104,43 +104,58 @@ export interface Database {
       pages: {
         Row: {
           id: string
-          notebook_id: string
+          notebook_id: string | null
           page_number: number
           date_created: string
           target_round: 1 | 2 | 3 | 4
+          current_round: number
           words_count: number
           is_completed: boolean
           next_review_date: string | null
           is_unlocked: boolean
           unlock_date: string | null
+          review_date: string | null
+          status: string | null
+          times_reviewed: number
+          last_reviewed: string | null
           created_at: string
           updated_at: string
         }
         Insert: {
           id?: string
-          notebook_id: string
+          notebook_id?: string | null
           page_number: number
           date_created?: string
           target_round?: 1 | 2 | 3 | 4
+          current_round?: number
           words_count?: number
           is_completed?: boolean
           next_review_date?: string | null
           is_unlocked?: boolean
           unlock_date?: string | null
+          review_date?: string | null
+          status?: string | null
+          times_reviewed?: number
+          last_reviewed?: string | null
           created_at?: string
           updated_at?: string
         }
         Update: {
           id?: string
-          notebook_id?: string
+          notebook_id?: string | null
           page_number?: number
           date_created?: string
           target_round?: 1 | 2 | 3 | 4
+          current_round?: number
           words_count?: number
           is_completed?: boolean
           next_review_date?: string | null
           is_unlocked?: boolean
           unlock_date?: string | null
+          review_date?: string | null
+          status?: string | null
+          times_reviewed?: number
+          last_reviewed?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -355,12 +370,121 @@ export interface Database {
           words_per_day: number
         }[]
       }
+      get_notebook_badges: {
+        Args: {
+          p_bronze_notebook_id: string
+        }
+        Returns: {
+          id: string
+          badge_type: string
+          created_at: string
+          total_words: number
+          active_pages_count: number
+          reviewable_pages_count: number
+        }[]
+      }
+      get_reviewable_badge_pages: {
+        Args: {
+          p_badge_id: string
+        }
+        Returns: {
+          page_id: string
+          page_number: number
+          review_date: string
+          words_count: number
+        }[]
+      }
+      create_notebook_badge: {
+        Args: {
+          p_bronze_notebook_id: string
+          p_badge_type: string
+        }
+        Returns: string
+      }
+      add_words_to_badge: {
+        Args: {
+          p_badge_id: string
+          p_words: string[]
+        }
+        Returns: {
+          page_id: string
+          page_completed: boolean
+          review_date_set: string | null
+        }[]
+      }
+      migrate_failed_bronze_words_to_silver: {
+        Args: {}
+        Returns: {
+          words_migrated: number
+          badges_created: number
+          pages_created: number
+        }[]
+      }
+      migrate_failed_silver_pages_to_gold: {
+        Args: {}
+        Returns: {
+          pages_migrated: number
+          words_migrated: number
+          badges_created: number
+        }[]
+      }
+      update_page_review_result: {
+        Args: {
+          p_page_id: string
+          p_remembered: boolean
+          p_current_date?: string
+        }
+        Returns: {
+          badge_acquired: string | null
+          migration_triggered: boolean
+        }[]
+      }
+      get_words_with_badge_level: {
+        Args: {
+          p_user_id: string
+        }
+        Returns: {
+          id: string
+          word: string
+          translation: string
+          meaning: string | null
+          example_sentence: string | null
+          notes: string | null
+          current_round: number
+          created_at: string
+          notebook_id: string
+          page_id: string
+          notebook_title: string
+          notebook_language: string
+          notebook_level: string
+          badge_type: string
+          review_type: string
+        }[]
+      }
+      run_badge_migrations: {
+        Args: {}
+        Returns: {
+          bronze_to_silver_words: number
+          silver_to_gold_pages: number
+          badges_created: number
+        }[]
+      }
+      migrate_single_failed_word_to_silver: {
+        Args: {
+          p_word_id: string
+        }
+        Returns: {
+          silver_badge_id: string
+          page_id: string
+          badge_created: boolean
+        }[]
+      }
     }
     Enums: {
       subscription_status: 'free' | 'weekly' | 'annual'
       notebook_level: 'bronze' | 'silver' | 'gold'
       word_status: 'learning' | 'mastered' | 'failed'
-      round_number: 1 | 2 | 3 | 4
+      round_number: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
     }
   }
 }

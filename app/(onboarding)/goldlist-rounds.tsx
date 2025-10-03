@@ -120,7 +120,7 @@ export default function GoldListRoundsScreen() {
                 <Text style={styles.notebookTitle}>Silver Notebook</Text>
               </View>
               <Text style={styles.notebookDescription}>
-                Words that didn't stick in Bronze get more focused attention here.
+                Words that didn&apos;t stick in Bronze get more focused attention here.
               </Text>
             </View>
 

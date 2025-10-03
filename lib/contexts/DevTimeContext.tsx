@@ -12,6 +12,7 @@ interface DevTimeContextType {
   previousDay: () => void
   getSimulatedDaysElapsed: () => number
   registerDayChangeCallback: (callback: () => void) => () => void
+  clearSimulationState: () => Promise<void>
 }
 
 const DevTimeContext = createContext<DevTimeContextType | null>(null)
@@ -19,7 +20,7 @@ const DevTimeContext = createContext<DevTimeContextType | null>(null)
 export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   const [isSimulationActive, setIsSimulationActive] = useState(false)
   const [simulationStartTime, setSimulationStartTime] = useState(new Date())
-  const [currentSimulatedDay, setCurrentSimulatedDay] = useState(1)
+  const [currentSimulatedDay, setCurrentSimulatedDay] = useState(0)
 
   // Load simulation state on mount
   useEffect(() => {
@@ -29,11 +30,20 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   const loadSimulationState = async () => {
     try {
       const saved = await AsyncStorage.getItem('devTimeSimulation')
+      console.log('🔍 LOADED STATE DEBUG:', saved) // One-time debug
       if (saved) {
-        const { isActive, startTime, simulatedDay } = JSON.parse(saved)
+        const { isActive, startTime, simulatedDay, version } = JSON.parse(saved)
+        console.log(`🔍 PARSED STATE: version=${version}, simulatedDay=${simulatedDay}`) // One-time debug
         setIsSimulationActive(isActive)
         setSimulationStartTime(new Date(startTime))
-        setCurrentSimulatedDay(simulatedDay || 0)
+        
+        // Fix for Day 16 vs Day 15 issue: subtract 1 from saved state
+        // If simulatedDay=15 in storage, we want currentSimulatedDay=14 to display as "Day 15"
+        const correctedDay = Math.max(0, (simulatedDay || 1) - 1)
+        console.log(`🔄 Correcting simulation day from ${simulatedDay} to ${correctedDay} (Day ${correctedDay + 1} display)`)
+        setCurrentSimulatedDay(correctedDay)
+        // Save corrected state immediately
+        await saveSimulationState(isActive, new Date(startTime), correctedDay)
       }
     } catch (error) {
       console.error('Error loading simulation state:', error)
@@ -45,7 +55,8 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.setItem('devTimeSimulation', JSON.stringify({
         isActive,
         startTime: startTime.toISOString(),
-        simulatedDay
+        simulatedDay,
+        version: 2 // Track format version for future migrations
       }))
     } catch (error) {
       console.error('Error saving simulation state:', error)
@@ -56,13 +67,25 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     const now = new Date()
     setIsSimulationActive(true)
     setSimulationStartTime(now)
-    setCurrentSimulatedDay(1)
-    saveSimulationState(true, now, 1)
+    setCurrentSimulatedDay(0)
+    saveSimulationState(true, now, 0)
   }
 
   const stopSimulation = () => {
     setIsSimulationActive(false)
     saveSimulationState(false, simulationStartTime, currentSimulatedDay)
+  }
+
+  const clearSimulationState = async () => {
+    try {
+      await AsyncStorage.removeItem('devTimeSimulation')
+      setIsSimulationActive(false)
+      setCurrentSimulatedDay(0)
+      setSimulationStartTime(new Date())
+      console.log('🧹 Simulation state cleared')
+    } catch (error) {
+      console.error('Error clearing simulation state:', error)
+    }
   }
 
   const dayChangeCallbacksRef = useRef<Array<() => void>>([])
@@ -107,7 +130,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
 
   const previousDay = async () => {
     const oldDay = currentSimulatedDay
-    const newDay = Math.max(1, currentSimulatedDay - 1)
+    const newDay = Math.max(0, currentSimulatedDay - 1)
     setCurrentSimulatedDay(newDay)
     saveSimulationState(isSimulationActive, simulationStartTime, newDay)
     
@@ -115,7 +138,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   }
 
   const getSimulatedDaysElapsed = (): number => {
-    return currentSimulatedDay
+    return currentSimulatedDay + 1
   }
 
   const getCurrentDate = (): Date => {
@@ -123,8 +146,19 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
       return new Date()
     }
     
+    // Calculate simulation date based on start time and current day
     const simulatedDate = new Date(simulationStartTime)
-    simulatedDate.setDate(simulatedDate.getDate() + (currentSimulatedDay - 1))
+    simulatedDate.setHours(0, 0, 0, 0)
+    
+    // For Day 1 words to be reviewed on Day 15, we need:
+    // currentSimulatedDay = 0 → Day 1 → simulationStartTime + 0 days
+    // currentSimulatedDay = 14 → Day 15 → simulationStartTime + 14 days  
+    // So the offset should be currentSimulatedDay
+    const dayOffset = currentSimulatedDay
+    simulatedDate.setDate(simulatedDate.getDate() + dayOffset)
+    
+    // Debug logging disabled to prevent spam
+    
     return simulatedDate
   }
 
@@ -138,7 +172,8 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
       nextDay,
       previousDay,
       getSimulatedDaysElapsed,
-      registerDayChangeCallback
+      registerDayChangeCallback,
+      clearSimulationState
     }}>
       {children}
     </DevTimeContext.Provider>

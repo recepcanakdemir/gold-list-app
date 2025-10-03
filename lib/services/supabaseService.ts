@@ -180,7 +180,8 @@ class SupabaseService {
         title: data.title,
         language: data.language,
         language_code: data.language_code,
-        words_per_day: data.words_per_day
+        words_per_day: data.words_per_day,
+        notebook_level: 'bronze' // Explicitly set all manually created notebooks as Bronze
       })
       .select()
       .single()
@@ -261,8 +262,8 @@ class SupabaseService {
     let todaysPageNumber: number
     
     if (currentSimulatedDay !== undefined) {
-      // Use the simulation day directly (simulation day 1 = page 1)
-      todaysPageNumber = currentSimulatedDay
+      // Convert simulation day to page number (simulation day 0 = page 1)
+      todaysPageNumber = currentSimulatedDay + 1
     } else {
       // Fallback: calculate from notebook creation time
       const currentDateTime = getCurrentDate()
@@ -278,7 +279,7 @@ class SupabaseService {
       .from('pages')
       .select(`
         *,
-        words (*)
+        words!words_page_id_fkey (*)
       `)
       .eq('notebook_id', notebookId)
       .eq('page_number', todaysPageNumber)
@@ -303,7 +304,7 @@ class SupabaseService {
         })
         .select(`
           *,
-          words (*)
+          words!words_page_id_fkey (*)
         `)
         .single()
 
@@ -377,12 +378,12 @@ class SupabaseService {
       notes: word.notes || null,
       example_sentence: word.example_sentence || null,
       position_in_page: word.position_in_page,
-      current_round: 1,
+      current_round: 1 as 1,  // Cast to round_number enum type
       is_mastered: false,
       review_date: (() => {
         const currentDate = new Date(getCurrentDate())
         currentDate.setHours(0, 0, 0, 0)
-        const reviewDate = new Date(currentDate.getTime() + 14 * 24 * 60 * 60 * 1000)
+        const reviewDate = new Date(currentDate.getTime() + 13 * 24 * 60 * 60 * 1000)
         
         // Use local date formatting to avoid timezone issues
         const year = reviewDate.getFullYear()
@@ -390,11 +391,14 @@ class SupabaseService {
         const day = String(reviewDate.getDate()).padStart(2, '0')
         const reviewDateStr = `${year}-${month}-${day}`
         
-        console.log(`🗓️ TIMING DEBUG - Word created on ${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}, review_date set to ${reviewDateStr} (added 14 days)`)
+        console.log(`🗓️ TIMING DEBUG - Word created on ${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}, review_date set to ${reviewDateStr} (added 13 days for Day 15 review)`)
         return reviewDateStr
       })(),
       times_reviewed: 0,
-      status: 'learning'
+      status: 'learning',
+      // Lineage tracking for Silver/Gold progression
+      source_notebook_id: page.notebook_id, // Track original Bronze notebook
+      original_page_id: pageId // Track original Bronze page
     }))
 
     console.log('⚡ Executing 3 operations in parallel: words insert, page update, profile query...')
@@ -411,7 +415,7 @@ class SupabaseService {
         next_review_date: (() => {
           const currentDate = new Date(getCurrentDate())
           currentDate.setHours(0, 0, 0, 0)
-          const reviewDate = new Date(currentDate.getTime() + 14 * 24 * 60 * 60 * 1000)
+          const reviewDate = new Date(currentDate.getTime() + 13 * 24 * 60 * 60 * 1000)
           
           // Use local date formatting to avoid timezone issues
           const year = reviewDate.getFullYear()
@@ -468,7 +472,7 @@ class SupabaseService {
       .from('pages')
       .select(`
         *,
-        words (*)
+        words!words_page_id_fkey (*)
       `)
       .eq('notebook_id', notebookId)
       .order('page_number', { ascending: true })
@@ -493,11 +497,12 @@ class SupabaseService {
       const currentDateTime = getCurrentDate()
       const currentDate = new Date(currentDateTime)
       currentDate.setHours(0, 0, 0, 0)
+      const currentDateString = currentDate.toISOString().split('T')[0]
       console.log(`🕰️ getAllWordsForReviewToday DEBUG - getCurrentDate(): ${currentDateTime.toISOString()}`)
-      console.log(`🕰️ getAllWordsForReviewToday DEBUG - Normalized currentDate: ${currentDate.toISOString().split('T')[0]}`)
+      console.log(`🕰️ getAllWordsForReviewToday DEBUG - Normalized currentDate: ${currentDateString}`)
       
-      // Get ALL words from ALL pages that are due for review today
-      const { data: words, error } = await supabase
+      // Get ALL words for review (Bronze, Silver, Gold by round classification)
+      const { data: allWords, error: wordsError } = await supabase
         .from('words')
         .select(`
           id,
@@ -510,33 +515,49 @@ class SupabaseService {
           last_reviewed,
           times_reviewed,
           page_id,
-          page:pages!inner(
+          page:pages!page_id(
             id,
             page_number,
             notebook_id,
-            notebook:notebooks!inner(user_id, title)
+            notebook:notebooks!inner(user_id, title, notebook_level)
           )
         `)
         .eq('page.notebook.user_id', user.id)
+        .eq('page.notebook.notebook_level', 'bronze')  // All words still in Bronze notebooks
         .eq('is_mastered', false)
+        .eq('status', 'learning')
         .not('review_date', 'is', null)
+        .order('current_round', { ascending: true })
+        .order('page_number', { ascending: true, foreignTable: 'page' })
+        .order('id', { ascending: true })
 
-      if (error) {
-        throw new Error(`Failed to get words for review: ${error.message}`)
+      if (wordsError) {
+        throw new Error(`Failed to get words for review: ${wordsError.message}`)
       }
 
-      if (!words || words.length === 0) return []
-
-      // Filter words that are actually due for review today
-      const reviewableWords = words.filter(word => {
-        const reviewDate = new Date(word.review_date)
-        reviewDate.setHours(0, 0, 0, 0)
-        const isDue = reviewDate <= currentDate
-        console.log(`🔍 getAllWordsForReviewToday DEBUG - Word ${word.id}: reviewDate=${reviewDate.toISOString().split('T')[0]}, currentDate=${currentDate.toISOString().split('T')[0]}, isDue=${isDue}`)
+      // Filter words that are due today and classify by rounds
+      const reviewableWords = (allWords || []).filter(word => {
+        const reviewDateString = word.review_date
+        const isDue = reviewDateString === currentDateString
+        
+        // Classify words by their current round for logging
+        const badgeType = word.current_round <= 4 ? 'Bronze' : 
+                         word.current_round <= 8 ? 'Silver' : 'Gold'
+        const displayRound = word.current_round <= 4 ? word.current_round :
+                           word.current_round <= 8 ? word.current_round - 4 : 
+                           word.current_round - 8
+        
+        console.log(`🔍 ${badgeType} Word ${word.id}: reviewDate=${reviewDateString}, currentDate=${currentDateString}, isDue=${isDue}`)
         return isDue
       })
 
-      console.log(`📅 Found ${reviewableWords.length} words due for review today across ${new Set(reviewableWords.map(w => (w.page as any).page_number)).size} pages`)
+      // Count words by badge type for logging
+      const bronzeWords = reviewableWords.filter(w => w.current_round <= 4)
+      const silverWords = reviewableWords.filter(w => w.current_round >= 5 && w.current_round <= 8)
+      const goldWords = reviewableWords.filter(w => w.current_round >= 9 && w.current_round <= 12)
+      
+      console.log(`📅 Found ${bronzeWords.length} Bronze words and ${silverWords.length + goldWords.length} Silver/Gold words due for review today`)
+      console.log(`📅 Total: ${reviewableWords.length} words from ${new Set(reviewableWords.map(w => (w.page as any).notebook_id)).size} pages/sessions`)
       
       return reviewableWords
     }, 'getAllWordsForReviewToday')
@@ -566,88 +587,53 @@ class SupabaseService {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error('Not authenticated')
 
-    const currentDateTime = getCurrentDate()
-    console.log(`🕰️ REVIEW CHECK DEBUG - getCurrentDate() returns: ${currentDateTime.toISOString()}`)
-    const normalizedDate = new Date(currentDateTime)
-    normalizedDate.setHours(0, 0, 0, 0)
-    console.log(`🕰️ REVIEW CHECK DEBUG - Normalized current date will be: ${normalizedDate.toISOString().split('T')[0]}`)
-    
-    // Get all learning words for the notebook (no timestamp filter)
-    const { data: words, error } = await supabase
+    // Get all words from the notebook directly
+    const { data: wordsData, error } = await supabase
       .from('words')
-      .select(`
-        *,
-        pages!inner(notebook_id)
-      `)
-      .eq('pages.notebook_id', notebookId)
-      .eq('status', 'learning')
-      .eq('is_mastered', false)
+      .select('*')
+      .eq('notebook_id', notebookId)
 
     if (error) throw error
-    if (!words) return []
+    if (!wordsData) return []
 
-    // Filter words using client-side simulation-aware logic
-    const reviewableWords = words.filter(word => {
-      const currentDate = new Date(currentDateTime)
-      currentDate.setHours(0, 0, 0, 0)
-      
-      // Check if word has a review_date and if it's due
-      if (word.review_date) {
-        const reviewDate = new Date(word.review_date)
-        reviewDate.setHours(0, 0, 0, 0)
-        const isDue = currentDate >= reviewDate
-        console.log(`🔍 TIMING DEBUG - Checking word ${word.id}: currentDate=${currentDate.toISOString().split('T')[0]}, reviewDate=${reviewDate.toISOString().split('T')[0]}, isDue=${isDue}`)
-        return isDue
-      } else {
-        // Fallback to creation date logic for words without review_date
-        const wordCreated = new Date(word.created_at)
-        wordCreated.setHours(0, 0, 0, 0)
-        
-        const daysSinceCreated = Math.floor(
-          (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
-        )
-        
-        return daysSinceCreated >= 14
-      }
-    })
+    const notebookWords = wordsData
 
     // Transform to WordWithReviews format
-    return reviewableWords.map(word => {
-      const currentDate = new Date(currentDateTime)
+    return notebookWords.map(word => {
+      const currentDate = getCurrentDate()
       currentDate.setHours(0, 0, 0, 0)
       
       let daysSinceCreated: number
       let daysUntilReview: number
       
-      if (word.review_date) {
-        const reviewDate = new Date(word.review_date)
-        reviewDate.setHours(0, 0, 0, 0)
-        daysSinceCreated = Math.floor(
-          (currentDate.getTime() - reviewDate.getTime()) / (24 * 60 * 60 * 1000)
-        )
-        daysUntilReview = Math.max(0, -daysSinceCreated)
-      } else {
-        const wordCreated = new Date(word.created_at)
-        wordCreated.setHours(0, 0, 0, 0)
-        daysSinceCreated = Math.floor(
-          (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
-        )
-        daysUntilReview = Math.max(0, 14 - daysSinceCreated)
-      }
+      const wordCreated = new Date(word.created_at)
+      wordCreated.setHours(0, 0, 0, 0)
+      daysSinceCreated = Math.floor(
+        (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
+      )
+      daysUntilReview = 0 // Already filtered by database function
 
       return {
         ...word,
+        // Add required properties for WordWithReviews interface
         reviews: [],
-        page: { id: word.page_id } as any,
-        nextReviewDate: word.review_date ? new Date(word.review_date) : null,
+        page: { id: word.page_id || null } as any,
+        nextReviewDate: null,
         daysSinceCreated,
-        isReviewable: true,
-        daysUntilReview
+        isReadyForReview: true, // Note: property name should be isReadyForReview, not isReviewable
+        // Legacy badge properties (kept for compatibility)
+        badge_type: word.badge_type || null,
+        review_type: word.review_type || 'word',
+        notebook_level: word.notebook_level || 'bronze'
       }
     })
   }
 
-  async processWordReview(wordId: string, remembered: boolean): Promise<{ success: boolean }> {
+  async processWordReview(
+    wordId: string, 
+    remembered: boolean, 
+    reviewType: 'word' | 'page' = 'word'
+  ): Promise<{ success: boolean; badgeAcquired?: string; migrationTriggered?: boolean }> {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error('Not authenticated')
 
@@ -655,33 +641,61 @@ class SupabaseService {
       const currentDate = getCurrentDate()
       const currentDateString = currentDate.toISOString().split('T')[0] // YYYY-MM-DD format
       
-      // Try enhanced function first
-      let { error } = await supabase.rpc('update_word_review_result', {
-        p_word_id: wordId,
-        p_remembered: remembered,
-        p_current_date: currentDateString
-      })
+      if (reviewType === 'page') {
+        // Handle page-based review for Silver/Gold
+        const { data: word } = await supabase
+          .from('words')
+          .select('page_id')
+          .eq('id', wordId)
+          .single()
+        
+        if (!word?.page_id) throw new Error('Page ID not found for word')
+        
+        const { data: pageReviewResult, error } = await supabase.rpc('update_page_review_result', {
+          p_page_id: word.page_id,
+          p_remembered: remembered,
+          p_current_date: currentDateString
+        })
 
-      // If enhanced function doesn't exist, use client-side update with simulation support
-      if (error && error.code === 'PGRST202') {
-        console.log('📝 Using client-side update with simulation date support')
-        return await this.processWordReviewClientSide(wordId, remembered, currentDateString)
+        if (error) throw error
+
+        const result = pageReviewResult?.[0]
+        console.log(`✅ Page review processed: ${word.page_id}, remembered: ${remembered}`)
+        
+        return { 
+          success: true,
+          badgeAcquired: result?.badge_acquired,
+          migrationTriggered: result?.migration_triggered
+        }
+      } else {
+        // Handle word-based review for Bronze
+        let { error } = await supabase.rpc('update_word_review_result', {
+          p_word_id: wordId,
+          p_remembered: remembered,
+          p_current_date: currentDateString
+        })
+
+        // If enhanced function doesn't exist, use client-side update with simulation support
+        if (error && error.code === 'PGRST202') {
+          console.log('📝 Using client-side update with simulation date support')
+          return await this.processWordReviewClientSide(wordId, remembered, currentDateString)
+        }
+
+        if (error) {
+          console.error('Error processing word review:', error)
+          throw error
+        }
+
+        console.log(`✅ Word review processed: ${wordId}, remembered: ${remembered}`)
+        return { success: true }
       }
-
-      if (error) {
-        console.error('Error processing word review:', error)
-        throw error
-      }
-
-      console.log(`✅ Word review processed: ${wordId}, remembered: ${remembered}`)
-      return { success: true }
     } catch (error) {
       console.error('Failed to process word review:', error)
       throw error
     }
   }
 
-  // Client-side word review processing with full simulation date support
+  // Client-side word review processing with simplified 12-round system
   async processWordReviewClientSide(wordId: string, remembered: boolean, currentDate: string): Promise<{ success: boolean }> {
     // Get current word state
     const { data: word, error: fetchError } = await supabase
@@ -693,11 +707,6 @@ class SupabaseService {
     if (fetchError) throw fetchError
     if (!word) throw new Error('Word not found')
 
-    // Calculate next review date (14 days from current simulation date)
-    const nextReviewDate = new Date(currentDate)
-    nextReviewDate.setDate(nextReviewDate.getDate() + 14)
-    const nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
-
     let updateData: any = {
       times_reviewed: (word.times_reviewed || 0) + 1,
       last_reviewed: currentDate,
@@ -708,14 +717,34 @@ class SupabaseService {
       // Remembered words are mastered and removed from future reviews
       updateData.is_mastered = true
       updateData.status = 'mastered'
-      // No review_date needed - they're done forever
+      updateData.review_date = null
       console.log(`🏆 Word ${wordId} remembered and mastered (round ${word.current_round})`)
     } else {
-      // Forgotten words advance to next round by 1
-      updateData.current_round = word.current_round + 1
-      updateData.review_date = nextReviewDateString
-      updateData.status = 'learning'
-      console.log(`📈 Word ${wordId} forgotten - advanced from round ${word.current_round} to ${word.current_round + 1}`)
+      // Forgotten words advance to next round (1-12)
+      const nextRound = word.current_round + 1
+      
+      if (nextRound > 12) {
+        // Even Gold Round 4 failures (Round 12+) become mastered
+        updateData.is_mastered = true
+        updateData.status = 'mastered'
+        updateData.current_round = 12  // Cap at round 12
+        updateData.review_date = null
+        console.log(`🏆 Word ${wordId} reached maximum difficulty (Gold Round 4) - now mastered`)
+      } else {
+        // Continue learning at next round
+        const nextReviewDate = new Date(currentDate)
+        nextReviewDate.setDate(nextReviewDate.getDate() + 14)
+        const nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
+        
+        updateData.current_round = nextRound as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
+        updateData.review_date = nextReviewDateString
+        updateData.status = 'learning'
+        
+        // Log with badge information for user clarity
+        const badgeType = nextRound <= 4 ? 'Bronze' : nextRound <= 8 ? 'Silver' : 'Gold'
+        const displayRound = nextRound <= 4 ? nextRound : nextRound <= 8 ? nextRound - 4 : nextRound - 8
+        console.log(`📈 Word ${wordId} forgotten - advanced to ${badgeType} Round ${displayRound} (database round ${nextRound})`)
+      }
     }
 
     // Update the word
@@ -732,13 +761,139 @@ class SupabaseService {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', word.notebook_id)
 
-    console.log(`✅ Word review processed (client-side): ${wordId}, remembered: ${remembered}`)
+    console.log(`✅ Word review processed (simplified system): ${wordId}, remembered: ${remembered}`)
     return { success: true }
   }
 
   // Batch process multiple word reviews for better performance
-  async processBatchWordReviews(reviews: Array<{ wordId: string; remembered: boolean }>): Promise<{ success: boolean }> {
-    if (reviews.length === 0) return { success: true }
+  // Check for notebook progressions after reviews are completed
+  async checkNotebookProgressions(reviews: Array<{ wordId: string; remembered: boolean }>): Promise<{ 
+    silverCreated: boolean; 
+    silverMigratedCount: number; 
+    goldCreated: boolean; 
+    goldMigratedCount: number;
+    silverNotebookId?: string;
+    bronzeNotebookTitle?: string;
+    silverNotebookTitle?: string;
+  }> {
+    console.log(`🔍 Checking progressions for ${reviews.length} reviews`)
+    
+    // Get word details for progression checking
+    const wordIds = reviews.map(r => r.wordId)
+    const { data: words } = await supabase
+      .from('words')
+      .select(`
+        id, current_round, notebook_id,
+        notebooks!inner(id, title, notebook_level)
+      `)
+      .in('id', wordIds)
+    
+    if (!words) {
+      console.log('❌ No words found for progression check')
+      return {
+        silverCreated: false,
+        silverMigratedCount: 0,
+        goldCreated: false,
+        goldMigratedCount: 0
+      }
+    }
+    
+    // Check for Round 4 failures that need progression
+    const round4Failures = words.filter(word => {
+      const review = reviews.find(r => r.wordId === word.id)
+      return word.current_round === 4 && review && !review.remembered
+    })
+    
+    let silverCreated = false
+    let silverMigratedCount = 0
+    let goldCreated = false
+    let goldMigratedCount = 0
+    let silverNotebookId: string | undefined
+    let bronzeNotebookTitle: string | undefined
+    let silverNotebookTitle: string | undefined
+    
+    if (round4Failures.length > 0) {
+      console.log(`📈 Found ${round4Failures.length} Round 4 failures needing progression`)
+      
+      // Group by notebook level for different progression paths
+      const bronzeFailures = round4Failures.filter(w => w.notebooks.notebook_level === 'bronze')
+      const silverFailures = round4Failures.filter(w => w.notebooks.notebook_level === 'silver')
+      
+      // Handle Bronze → Silver progression
+      if (bronzeFailures.length > 0) {
+        console.log(`🥉→🥈 Processing ${bronzeFailures.length} Bronze → Silver progressions`)
+        try {
+          // Run Bronze→Silver migration
+          const { data: migrationResult } = await supabase.rpc('migrate_failed_bronze_words_to_silver')
+          
+          if (migrationResult && migrationResult.length > 0) {
+            const result = migrationResult[0]
+            silverCreated = result.badges_created > 0
+            silverMigratedCount = result.words_migrated || bronzeFailures.length
+            bronzeNotebookTitle = bronzeFailures[0]?.notebooks.title
+            
+            console.log(`✅ Bronze→Silver migration: ${silverMigratedCount} words, ${result.badges_created} badges created`)
+          }
+        } catch (error) {
+          console.error('❌ Bronze→Silver migration failed:', error)
+        }
+      }
+      
+      // Handle Silver → Gold progression
+      if (silverFailures.length > 0) {
+        console.log(`🥈→🥇 Processing ${silverFailures.length} Silver → Gold progressions`)
+        try {
+          // Run Silver→Gold migration
+          const { data: migrationResult } = await supabase.rpc('migrate_failed_silver_pages_to_gold')
+          
+          if (migrationResult && migrationResult.length > 0) {
+            const result = migrationResult[0]
+            goldCreated = result.badges_created > 0
+            goldMigratedCount = result.words_migrated || silverFailures.length
+            silverNotebookTitle = silverFailures[0]?.notebooks.title
+            
+            console.log(`✅ Silver→Gold migration: ${goldMigratedCount} words, ${result.badges_created} badges created`)
+          }
+        } catch (error) {
+          console.error('❌ Silver→Gold migration failed:', error)
+        }
+      }
+    }
+    
+    console.log(`📊 Progression results: Silver created: ${silverCreated} (${silverMigratedCount} words), Gold created: ${goldCreated} (${goldMigratedCount} words)`)
+    
+    return {
+      silverCreated,
+      silverMigratedCount,
+      goldCreated,
+      goldMigratedCount,
+      silverNotebookId,
+      bronzeNotebookTitle,
+      silverNotebookTitle
+    }
+  }
+
+  async processBatchWordReviews(reviews: Array<{ wordId: string; remembered: boolean }>): Promise<{ 
+    success: boolean; 
+    silverCreated: boolean; 
+    silverMigratedCount: number; 
+    goldCreated: boolean; 
+    goldMigratedCount: number;
+    silverNotebookId?: string;
+    bronzeNotebookTitle?: string;
+    silverNotebookTitle?: string;
+  }> {
+    if (reviews.length === 0) return { success: true, silverCreated: false, silverMigratedCount: 0, goldCreated: false, goldMigratedCount: 0 }
+
+    // Safety net: Deduplicate reviews to prevent database errors
+    const originalLength = reviews.length
+    const deduplicatedReviews = reviews.filter((review, index, arr) => 
+      arr.findIndex(r => r.wordId === review.wordId) === index
+    )
+    
+    if (deduplicatedReviews.length !== originalLength) {
+      console.warn(`⚠️ Database safety net: Removed ${originalLength - deduplicatedReviews.length} duplicate word reviews`)
+    }
 
     return withRetry(async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -748,14 +903,14 @@ class SupabaseService {
       const currentDate = getCurrentDate()
       const currentDateString = currentDate.toISOString().split('T')[0]
       
-      console.log(`📦 Processing batch of ${reviews.length} word reviews...`)
+      console.log(`📦 Processing batch of ${deduplicatedReviews.length} word reviews...`)
 
       // Try using the optimized database RPC function first
       try {
         console.log(`⚡ Using optimized database RPC for batch processing...`)
         
         // Process each review using the optimized database function
-        const rpcPromises = reviews.map(review => 
+        const rpcPromises = deduplicatedReviews.map(review => 
           supabase.rpc('update_word_review_result', {
             p_word_id: review.wordId,
             p_remembered: review.remembered,
@@ -773,32 +928,49 @@ class SupabaseService {
           throw new Error('RPC batch processing had errors')
         }
 
-        console.log(`🚀 RPC batch processing completed: ${reviews.length} words processed via database functions`)
+        console.log(`🚀 RPC batch processing completed: ${deduplicatedReviews.length} words processed via database functions`)
       } catch (rpcError) {
         console.log(`🔄 RPC failed, falling back to client-side batch processing...`, rpcError)
 
         // Fallback to client-side batch processing
         // Get all words data in one query
-        const wordIds = reviews.map(r => r.wordId)
+        const wordIds = deduplicatedReviews.map(r => r.wordId)
         const { data: words, error: fetchError } = await supabase
           .from('words')
-          .select('id, current_round, notebook_id, page_id, times_reviewed')
+          .select('id, current_round, notebook_id, page_id, times_reviewed, last_reviewed, created_at')
           .in('id', wordIds)
 
         if (fetchError) throw fetchError
-        if (!words || words.length !== reviews.length) {
+        if (!words || words.length !== deduplicatedReviews.length) {
+          console.error(`❌ Database mismatch: Expected ${deduplicatedReviews.length} words, found ${words?.length || 0}`)
+          console.error(`Missing word IDs:`, deduplicatedReviews.filter(r => !words?.find(w => w.id === r.wordId)).map(r => r.wordId))
           throw new Error('Some words not found')
         }
 
         // Prepare batch updates
         const wordsToUpdate = []
-        const nextReviewDate = new Date(currentDate)
-        nextReviewDate.setDate(nextReviewDate.getDate() + 14)
-        const nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
 
-        for (const review of reviews) {
+        for (const review of deduplicatedReviews) {
           const word = words.find(w => w.id === review.wordId)
           if (!word) continue
+
+          // Calculate next review date using CURRENT review date (not old last_reviewed)
+          let nextReviewDateString: string | undefined
+          if (!review.remembered && word.current_round < 12) {
+            // Calculate next review date for all forgotten words (rounds 1-11) that continue learning
+            // Use current review date + 14 days for consistent Gold List Method timing
+            const baseDate = new Date(currentDate)
+            const nextReviewDate = new Date(baseDate)
+            nextReviewDate.setDate(nextReviewDate.getDate() + 14)
+            
+            // Validate the calculated next review date
+            if (isNaN(nextReviewDate.getTime())) {
+              console.error(`❌ Invalid next review date for word ${word.id}, skipping date calculation`)
+            } else {
+              nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
+              console.log(`📅 Word ${word.id} next review: ${currentDateString} + 14 days = ${nextReviewDateString}`)
+            }
+          }
 
           let updateData: any = {
             id: word.id,
@@ -814,11 +986,27 @@ class SupabaseService {
             // No review_date needed - they're done forever
             console.log(`🏆 Word ${word.id} remembered and mastered (round ${word.current_round})`)
           } else {
-            // Forgotten words advance to next round by 1
-            updateData.current_round = word.current_round + 1
-            updateData.review_date = nextReviewDateString
-            updateData.status = 'learning'
-            console.log(`📈 Word ${word.id} forgotten - advanced from round ${word.current_round} to ${word.current_round + 1}`)
+            // Forgotten words advance to next round (1-12) - simplified system
+            const nextRound = word.current_round + 1
+            
+            if (nextRound > 12) {
+              // Even Gold Round 4 failures (Round 12+) become mastered
+              updateData.is_mastered = true
+              updateData.status = 'mastered'
+              updateData.current_round = 12  // Cap at round 12
+              updateData.review_date = null
+              console.log(`🏆 Word ${word.id} reached maximum difficulty (Gold Round 4) - now mastered`)
+            } else {
+              // Continue learning at next round
+              updateData.current_round = nextRound as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
+              updateData.review_date = nextReviewDateString
+              updateData.status = 'learning'
+              
+              // Log with badge information for user clarity
+              const badgeType = nextRound <= 4 ? 'Bronze' : nextRound <= 8 ? 'Silver' : 'Gold'
+              const displayRound = nextRound <= 4 ? nextRound : nextRound <= 8 ? nextRound - 4 : nextRound - 8
+              console.log(`📈 Word ${word.id} forgotten - advanced to ${badgeType} Round ${displayRound} (database round ${nextRound})`)
+            }
           }
 
           wordsToUpdate.push(updateData)
@@ -861,8 +1049,20 @@ class SupabaseService {
         }
       }
 
+      // After all reviews are processed, check for Silver/Gold progression
+      const progressionResults = await this.checkNotebookProgressions(reviews)
+      
       console.log(`✅ Batch review completed: ${reviews.length} words processed`)
-      return { success: true }
+      return { 
+        success: true,
+        silverCreated: progressionResults.silverCreated,
+        silverMigratedCount: progressionResults.silverMigratedCount,
+        goldCreated: progressionResults.goldCreated,
+        goldMigratedCount: progressionResults.goldMigratedCount,
+        silverNotebookId: progressionResults.silverNotebookId,
+        bronzeNotebookTitle: progressionResults.bronzeNotebookTitle,
+        silverNotebookTitle: progressionResults.silverNotebookTitle
+      }
     } catch (error) {
       console.error('Failed to process batch word reviews:', error)
       throw error
@@ -894,7 +1094,7 @@ class SupabaseService {
           id,
           words_count,
           is_completed,
-          notebook:notebooks!inner(user_id, words_per_day)
+          notebook:notebooks!notebook_id(user_id, words_per_day)
         `)
         .eq('notebooks.user_id', user.id)
         .eq('date_created', todayDateStr)
@@ -946,6 +1146,90 @@ class SupabaseService {
   }
 
   // =============================================
+  // SILVER & GOLD NOTEBOOK SYSTEM
+  // =============================================
+
+  // Check if Bronze notebook has words that failed Round 4
+  async checkBronzeRound4Failures(notebookId: string): Promise<{ hasFailures: boolean; failedWords: any[] }> {
+    // Badge system removed - return no failures
+    return { hasFailures: false, failedWords: [] }
+  }
+
+  // Check if Silver notebook has words that failed Round 4 (for Gold migration)
+  async checkSilverRound4Failures(notebookId: string): Promise<{ hasFailures: boolean; failedWords: any[] }> {
+    // Badge system removed - return no failures
+    return { hasFailures: false, failedWords: [] }
+  }
+
+  // Create Silver notebook automatically
+  async createSilverNotebook(bronzeNotebookId: string): Promise<any> {
+    // Badge system removed - return null
+    return null
+  }
+
+  // Create Gold notebook automatically
+  async createGoldNotebook(silverNotebookId: string): Promise<any> {
+    // Badge system removed - return null
+    return null
+  }
+
+  // Migrate failed Bronze words to Silver notebook
+  async migrateBronzeToSilver(bronzeNotebookId: string, silverNotebookId: string, failedWordIds: string[]): Promise<any[]> {
+    // Badge system removed - return empty array
+    return []
+  }
+
+  // Migrate failed Silver words to Gold notebook  
+  async migrateSilverToGold(silverNotebookId: string, goldNotebookId: string, failedWordIds: string[]): Promise<any[]> {
+    // Badge system removed - return empty array
+    return []
+  }
+
+  // Archive Gold words that fail Round 4 (mark as "super hard")
+  async archiveGoldFailures(goldNotebookId: string, failedWordIds: string[]): Promise<number> {
+    // Badge system removed - return 0
+    return 0
+  }
+
+  // Check if Silver notebook exists for a Bronze notebook
+  async getSilverNotebook(bronzeNotebookId: string): Promise<any | null> {
+    // Badge system removed - return null
+    return null
+  }
+
+  // Check if Gold notebook exists for a Silver notebook
+  async getGoldNotebook(silverNotebookId: string): Promise<any | null> {
+    // Badge system removed - return null
+    return null
+  }
+
+  // Main function to handle Bronze → Silver progression
+  async handleBronzeProgression(notebookId: string): Promise<{ 
+    silverCreated: boolean; 
+    silverNotebookId?: string; 
+    migratedCount: number;
+    bronzeNotebookTitle?: string;
+    silverNotebookTitle?: string;
+  }> {
+    // Badge system removed - return no progression
+    const bronzeNotebook = await this.getNotebook(notebookId)
+    const bronzeNotebookTitle = bronzeNotebook?.title || 'Bronze Notebook'
+    return { silverCreated: false, migratedCount: 0, bronzeNotebookTitle }
+  }
+
+  // Main function to handle Silver → Gold progression
+  async handleSilverProgression(notebookId: string): Promise<{ goldCreated: boolean; goldNotebookId?: string; migratedCount: number }> {
+    // Badge system removed - return no progression
+    return { goldCreated: false, migratedCount: 0 }
+  }
+
+  // Main function to handle Gold → Archive progression
+  async handleGoldProgression(notebookId: string): Promise<{ archivedCount: number }> {
+    // Badge system removed - return no progression
+    return { archivedCount: 0 }
+  }
+
+  // =============================================
   // CACHE UTILITY METHODS
   // =============================================
 
@@ -976,6 +1260,497 @@ class SupabaseService {
     dataCache.set(cacheKey, data, ttl)
     
     return data
+  }
+
+  // ==========================================
+  // BADGE SYSTEM METHODS (NEW)
+  // Replace Silver/Gold notebook system with badges
+  // ==========================================
+
+  // Create a badge for a Bronze notebook
+  async createNotebookBadge(bronzeNotebookId: string, badgeType: 'silver' | 'gold'): Promise<string> {
+    // Badge system removed - return empty string
+    return ''
+  }
+
+  // Badge system removed - return empty array
+  async getNotebookBadges(bronzeNotebookId: string): Promise<any[]> {
+    return []
+  }
+
+  // Badge system removed - return empty result
+  async addWordsToBadge(badgeId: string, wordIds: string[]): Promise<{
+    pageId: string
+    pageCompleted: boolean
+    reviewDateSet: string | null
+  }[]> {
+    return []
+  }
+
+  // Get reviewable badge pages
+  async getReviewableBadgePages(badgeId: string): Promise<any[]> {
+    return withRetry(async () => {
+      const { data: pages, error } = await supabase
+        .rpc('get_reviewable_badge_pages', {
+          p_badge_id: badgeId
+        })
+
+      if (error) {
+        throw new Error(`Failed to get reviewable badge pages: ${error.message}`)
+      }
+
+      return pages || []
+    }, 'getReviewableBadgePages')
+  }
+
+  // Check for Round 4 failures and create badges as needed
+  async handleBronzeProgressionWithBadges(notebookId: string): Promise<{
+    silverCreated: boolean
+    silverBadgeId?: string
+    migratedCount: number
+    bronzeNotebookTitle?: string
+    silverNotebookTitle?: string
+  }> {
+    // Badge system removed - return no progression
+    const bronzeNotebook = await this.getNotebook(notebookId)
+    const bronzeNotebookTitle = bronzeNotebook?.title || 'Bronze Notebook'
+    return { silverCreated: false, migratedCount: 0, bronzeNotebookTitle }
+  }
+
+  // Mark words as migrated (helper function)
+  async markWordsAsMigrated(wordIds: string[]): Promise<void> {
+    // Badge system removed - no action needed
+    return
+  }
+
+  // Get words for badge page review (page-based review system)
+  async getWordsForBadgeReview(badgeId: string, pageId: string): Promise<WordWithReviews[]> {
+    // Badge system removed - return empty array
+    return []
+  }
+
+  // Get all reviewable content for user (both Bronze notebooks and badges)
+  async getAllReviewableContent(): Promise<{
+    bronzeWords: WordWithReviews[]
+    badgePages: Array<{
+      badgeId: string
+      badgeType: string
+      pageId: string
+      pageNumber: number
+      reviewDate: string
+      wordsCount: number
+      bronzeNotebookTitle: string
+    }>
+  }> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Not authenticated')
+
+      const currentDate = getCurrentDate()
+      const currentDateString = currentDate.toISOString().split('T')[0]
+
+      // Get Bronze notebook words (existing logic)
+      const { data: bronzeWords, error: bronzeError } = await supabase
+        .rpc('get_words_for_review', { p_user_id: user.id })
+
+      if (bronzeError) {
+        console.error('Error getting Bronze words:', bronzeError)
+      }
+
+      // Get reviewable badge pages  
+      const { data: badgePages, error: badgeError } = await supabase
+        .from('pages')
+        .select(`
+          id,
+          page_number,
+          review_date,
+          words_count,
+          badge_id,
+          notebook_badges!badge_id(
+            badge_type,
+            bronze_notebook_id,
+            notebooks!bronze_notebook_id(title)
+          )
+        `)
+        .not('badge_id', 'is', null)
+        .eq('status', 'ready_for_review')
+        .lte('review_date', currentDateString)
+        .order('review_date', { ascending: true })
+
+      if (badgeError) {
+        console.error('Error getting badge pages:', badgeError)
+      }
+
+      // Format badge pages data
+      const formattedBadgePages = (badgePages || []).map(page => ({
+        badgeId: page.badge_id,
+        badgeType: (page.notebook_badges as any)?.badge_type || 'unknown',
+        pageId: page.id,
+        pageNumber: page.page_number,
+        reviewDate: page.review_date,
+        wordsCount: page.words_count,
+        bronzeNotebookTitle: (page.notebook_badges as any)?.notebooks?.title || 'Unknown Notebook'
+      }))
+
+      console.log(`📚 Found ${bronzeWords?.length || 0} Bronze words and ${formattedBadgePages.length} badge pages for review`)
+
+      return {
+        bronzeWords: bronzeWords || [],
+        badgePages: formattedBadgePages
+      }
+    }, 'getAllReviewableContent')
+  }
+
+  // Process badge page review results (page-based system)
+  async processBadgePageReview(
+    pageId: string, 
+    badgeId: string,
+    reviews: Array<{ wordId: string; remembered: boolean }>
+  ): Promise<{
+    success: boolean
+    pageAdvanced: boolean
+    newReviewDate?: string
+    migrationNeeded?: boolean
+    nextLevel?: 'gold' | 'archived'
+  }> {
+    return withRetry(async () => {
+      const currentDate = getCurrentDate()
+      const currentDateString = currentDate.toISOString().split('T')[0]
+
+      // Process individual word reviews first
+      for (const review of reviews) {
+        if (review.remembered) {
+          // Remembered words are mastered
+          await supabase
+            .from('words')
+            .update({
+              is_mastered: true,
+              status: 'mastered',
+              times_reviewed: supabase.sql`times_reviewed + 1`,
+              last_reviewed: currentDateString,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', review.wordId)
+        } else {
+          // Forgotten words just get their review count updated
+          await supabase
+            .from('words')
+            .update({
+              times_reviewed: supabase.sql`times_reviewed + 1`,
+              last_reviewed: currentDateString,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', review.wordId)
+        }
+      }
+
+      // Get current page info
+      const { data: page, error: pageError } = await supabase
+        .from('pages')
+        .select('*')
+        .eq('id', pageId)
+        .single()
+
+      if (pageError || !page) {
+        throw new Error('Page not found')
+      }
+
+      const forgottenWords = reviews.filter(r => !r.remembered)
+
+      if (page.status === 'ready_for_review') {
+        // Check if this was Round 4 of page
+        if (page.target_round >= 4) {
+          // Round 4 completed - handle migration if needed
+          if (forgottenWords.length > 0) {
+            // Mark page as needing migration
+            await supabase
+              .from('pages')
+              .update({ status: 'migrated' })
+              .eq('id', pageId)
+
+            return {
+              success: true,
+              pageAdvanced: false,
+              migrationNeeded: true,
+              nextLevel: 'gold' // Silver → Gold migration
+            }
+          } else {
+            // All words mastered - mark page as completed
+            await supabase
+              .from('pages')
+              .update({ status: 'completed' })
+              .eq('id', pageId)
+
+            return {
+              success: true,
+              pageAdvanced: false
+            }
+          }
+        } else {
+          // Advance to next round
+          const nextReviewDate = new Date(currentDate)
+          nextReviewDate.setDate(nextReviewDate.getDate() + 14)
+          const nextReviewDateString = nextReviewDate.toISOString().split('T')[0]
+
+          await supabase
+            .from('pages')
+            .update({
+              target_round: page.target_round + 1,
+              review_date: nextReviewDateString
+            })
+            .eq('id', pageId)
+
+          return {
+            success: true,
+            pageAdvanced: true,
+            newReviewDate: nextReviewDateString
+          }
+        }
+      }
+
+      return { success: true, pageAdvanced: false }
+    }, 'processBadgePageReview')
+  }
+
+  // Universal review function - handles both Bronze notebooks and badge pages
+  async getReviewContent(id: string, type?: 'notebook' | 'badge' | 'page'): Promise<{
+    type: 'notebook' | 'badge'
+    data: any
+    words: WordWithReviews[]
+  }> {
+    return withRetry(async () => {
+      // First, try to determine what type of ID this is
+      if (!type) {
+        // Auto-detect type by checking if it's a notebook or badge/page
+        const { data: notebook } = await supabase
+          .from('notebooks')
+          .select('id, notebook_level')
+          .eq('id', id)
+          .single()
+
+        if (notebook) {
+          type = 'notebook'
+        } else {
+          // Check if it's a badge ID
+          const { data: badge } = await supabase
+            .from('notebook_badges')
+            .select('id')
+            .eq('id', id)
+            .single()
+
+          if (badge) {
+            type = 'badge'
+          } else {
+            // Check if it's a page ID
+            const { data: page } = await supabase
+              .from('pages')
+              .select('id, badge_id')
+              .eq('id', id)
+              .single()
+
+            if (page && page.badge_id) {
+              type = 'page'
+            } else {
+              throw new Error('Invalid review ID - not a notebook, badge, or page')
+            }
+          }
+        }
+      }
+
+      if (type === 'notebook') {
+        // Bronze notebook review (existing logic)
+        const words = await this.getWordsForReview(id)
+        const notebook = await this.getNotebook(id)
+        return {
+          type: 'notebook',
+          data: notebook,
+          words
+        }
+      } else if (type === 'badge') {
+        // Badge review - get first reviewable page
+        const pages = await this.getReviewableBadgePages(id)
+        if (pages.length === 0) {
+          return {
+            type: 'badge',
+            data: { id, pages: [] },
+            words: []
+          }
+        }
+        
+        const firstPage = pages[0]
+        const words = await this.getWordsForBadgeReview(id, firstPage.page_id)
+        return {
+          type: 'badge',
+          data: { id, currentPage: firstPage, totalPages: pages.length },
+          words
+        }
+      } else if (type === 'page') {
+        // Specific page review
+        const { data: page } = await supabase
+          .from('pages')
+          .select(`
+            *,
+            notebook_badges!badge_id(*)
+          `)
+          .eq('id', id)
+          .single()
+
+        if (!page || !page.badge_id) {
+          throw new Error('Page not found or not a badge page')
+        }
+
+        const words = await this.getWordsForBadgeReview(page.badge_id, id)
+        return {
+          type: 'badge',
+          data: { 
+            id: page.badge_id, 
+            currentPage: { pageId: id, ...page },
+            totalPages: 1 
+          },
+          words
+        }
+      }
+
+      throw new Error('Invalid review type')
+    }, 'getReviewContent')
+  }
+
+  // Badge migration functions
+  // Badge system removed - return zero migrations
+  async runBadgeMigrations(): Promise<{
+    bronzeToSilverWords: number
+    silverToGoldPages: number
+    badgesCreated: number
+  }> {
+    return {
+      bronzeToSilverWords: 0,
+      silverToGoldPages: 0,
+      badgesCreated: 0
+    }
+  }
+
+  async migrateBronzeWordsToSilver(): Promise<{
+    wordsMigrated: number
+    badgesCreated: number
+    pagesCreated: number
+  }> {
+    // Badge system removed - return zero values
+    return { wordsMigrated: 0, badgesCreated: 0, pagesCreated: 0 }
+  }
+
+  async migrateSilverPagesToGold(): Promise<{
+    pagesMigrated: number
+    wordsMigrated: number
+    badgesCreated: number
+  }> {
+    // Badge system removed - return zero values
+    return { pagesMigrated: 0, wordsMigrated: 0, badgesCreated: 0 }
+  }
+
+  async getNotebookBadges(bronzeNotebookId: string): Promise<Array<{
+    id: string
+    badge_type: 'silver' | 'gold'
+    created_at: string
+    total_words: number
+    active_pages_count: number
+    reviewable_pages_count: number
+  }>> {
+    return withRetry(async () => {
+      const { data: badges, error } = await supabase.rpc('get_notebook_badges', {
+        p_bronze_notebook_id: bronzeNotebookId
+      })
+      
+      if (error) throw error
+      
+      return badges || []
+    }, 'getNotebookBadges')
+  }
+
+  // Background migration automation
+  private migrationSchedulerRef: number | null = null
+  private isSchedulingMigrations = false
+
+  async startAutomatedMigrations(intervalMinutes: number = 5): Promise<void> {
+    if (this.isSchedulingMigrations) {
+      console.log('🔄 Migration scheduler already running')
+      return
+    }
+
+    this.isSchedulingMigrations = true
+    console.log(`🤖 Starting automated migrations every ${intervalMinutes} minutes`)
+
+    const runMigrations = async () => {
+      try {
+        const result = { bronzeToSilverWords: 0, silverToGoldPages: 0 } // Badge system removed
+        
+        if (result.bronzeToSilverWords > 0 || result.silverToGoldPages > 0) {
+          console.log('🎉 Automated migration completed:', result)
+          
+          // Trigger app context update to show badge notifications
+          // This will be handled by the app context
+        }
+      } catch (error) {
+        console.error('❌ Automated migration failed:', error)
+      }
+    }
+
+    // Run initial migration
+    await runMigrations()
+
+    // Schedule recurring migrations
+    this.migrationSchedulerRef = window.setInterval(runMigrations, intervalMinutes * 60 * 1000)
+  }
+
+  stopAutomatedMigrations(): void {
+    if (this.migrationSchedulerRef) {
+      clearInterval(this.migrationSchedulerRef)
+      this.migrationSchedulerRef = null
+      this.isSchedulingMigrations = false
+      console.log('🛑 Automated migrations stopped')
+    }
+  }
+
+  // Check for pending migrations without running them
+  async checkPendingMigrations(): Promise<{
+    hasPendingBronzeToSilver: boolean
+    hasPendingSilverToGold: boolean
+    pendingBronzeWordsCount: number
+    pendingSilverPagesCount: number
+  }> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Not authenticated')
+
+      // Check for Bronze words that failed Round 4
+      const { data: bronzeWords, error: bronzeError } = await supabase
+        .from('words')
+        .select('id, pages!page_id(notebook_id, notebooks!notebook_id(user_id))')
+        .eq('status', 'failed')
+        .gte('current_round', 4)
+        .eq('pages.notebooks.user_id', user.id)
+
+      if (bronzeError) throw bronzeError
+
+      // Check for Silver pages that failed Round 4
+      const { data: silverPages, error: silverError } = await supabase
+        .from('pages')
+        .select('id, notebook_badges!badge_id(bronze_notebook_id, notebooks!bronze_notebook_id(user_id))')
+        .eq('status', 'failed')
+        .gte('current_round', 4)
+        .eq('notebook_badges.notebooks.user_id', user.id)
+
+      if (silverError) throw silverError
+
+      const validBronzeWords = bronzeWords?.filter(w => w.pages?.notebooks?.user_id === user.id) || []
+      const validSilverPages = silverPages?.filter(p => p.notebook_badges?.notebooks?.user_id === user.id) || []
+
+      return {
+        hasPendingBronzeToSilver: validBronzeWords.length > 0,
+        hasPendingSilverToGold: validSilverPages.length > 0,
+        pendingBronzeWordsCount: validBronzeWords.length,
+        pendingSilverPagesCount: validSilverPages.length
+      }
+    }, 'checkPendingMigrations')
   }
 }
 

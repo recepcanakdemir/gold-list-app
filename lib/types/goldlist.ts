@@ -8,7 +8,7 @@ type ReviewRow = Tables<'reviews'>['Row']
 type ProfileRow = Tables<'profiles'>['Row']
 
 // Core Gold List Method types
-export type Round = 1 | 2 | 3 | 4
+export type Round = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 export type NotebookLevel = 'bronze' | 'silver' | 'gold'
 export type WordStatus = 'learning' | 'mastered' | 'failed'
 export type SubscriptionStatus = 'free' | 'weekly' | 'annual'
@@ -40,6 +40,10 @@ export interface WordWithReviews extends WordRow {
   nextReviewDate: Date | null
   daysSinceCreated: number
   isReadyForReview: boolean
+  // Badge system properties
+  badge_type?: 'bronze' | 'silver' | 'gold'
+  review_type?: 'word' | 'page'
+  notebook_level?: 'bronze' | 'silver' | 'gold'
 }
 
 // Progress tracking types
@@ -150,12 +154,25 @@ export interface RootStackParams {
   Settings: undefined
 }
 
-// Color themes for rounds
+// Color themes for rounds - Custom color scheme
 export const ROUND_COLORS = {
-  1: { primary: '#DC2626', light: '#FEE2E2', dark: '#991B1B' }, // Red
-  2: { primary: '#059669', light: '#D1FAE5', dark: '#047857' }, // Green  
-  3: { primary: '#2563EB', light: '#DBEAFE', dark: '#1D4ED8' }, // Blue
-  4: { primary: '#D97706', light: '#FEF3C7', dark: '#B45309' }, // Yellow/Orange
+  // Bronze rounds (1-4) - Warmer, earthy tones
+  1: { primary: '#E54747', light: '#F8D7D7', dark: '#C63636' }, // Custom Red
+  2: { primary: '#8CAF64', light: '#E8F5D8', dark: '#7A9E5A' }, // Custom Green
+  3: { primary: '#009FFD', light: '#CCF2FF', dark: '#0080CC' }, // Custom Blue
+  4: { primary: '#FFA400', light: '#FFF4CC', dark: '#E69500' }, // Custom Orange
+  
+  // Silver rounds (5-8) - Cooler, sophisticated tones
+  5: { primary: '#A347E5', light: '#F0E6FC', dark: '#8E3BC7' }, // Custom Purple
+  6: { primary: '#D6EFFF', light: '#F0F9FF', dark: '#B8E6FF' }, // Custom Light Blue
+  7: { primary: '#FED99B', light: '#FFF8E6', dark: '#FECA66' }, // Custom Light Orange
+  8: { primary: '#C9883A', light: '#F2E6D6', dark: '#B07A34' }, // Custom Brown
+  
+  // Gold rounds (9-12) - Premium, rich tones
+  9: { primary: '#01967B', light: '#CCF2ED', dark: '#017A65' },  // Custom Teal
+  10: { primary: '#929982', light: '#F0F0ED', dark: '#7A7A70' }, // Custom Gray-Green
+  11: { primary: '#710000', light: '#E6CCCC', dark: '#5C0000' }, // Custom Dark Red
+  12: { primary: '#FE654F', light: '#FFEEED', dark: '#E55A47' }, // Custom Coral
 } as const
 
 // Notebook level colors

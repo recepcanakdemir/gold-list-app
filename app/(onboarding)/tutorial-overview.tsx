@@ -81,7 +81,7 @@ export default function TutorialOverviewScreen() {
 
         {/* Benefits */}
         <View style={styles.benefits}>
-          <Text style={styles.benefitsTitle}>What you'll get:</Text>
+          <Text style={styles.benefitsTitle}>What you&apos;ll get:</Text>
           <View style={styles.benefit}>
             <Text style={styles.benefitIcon}>📱</Text>
             <Text style={styles.benefitText}>Clean, intuitive interface</Text>

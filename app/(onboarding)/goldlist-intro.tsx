@@ -81,7 +81,7 @@ export default function GoldListIntroScreen() {
               <Text style={styles.keyPointIcon}>💡</Text>
               <Text style={styles.keyPointText}>
                 <Text style={styles.keyPointBold}>Key Insight:</Text> Your brain naturally 
-                forgets what's unimportant and remembers what matters. The Gold List Method 
+                forgets what&apos;s unimportant and remembers what matters. The Gold List Method 
                 works with this process, not against it.
               </Text>
             </View>

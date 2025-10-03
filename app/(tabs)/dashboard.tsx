@@ -273,7 +273,7 @@ export default function DashboardScreen() {
           </View>
           
           <Text style={styles.streakMotivation}>
-            Keep it up! You're doing great! 💪
+            Keep it up! You&apos;re doing great! 💪
           </Text>
         </View>
 

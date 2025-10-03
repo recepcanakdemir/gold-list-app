@@ -14,7 +14,8 @@ export function DevTimeDisplay() {
     stopSimulation,
     nextDay,
     previousDay,
-    getSimulatedDaysElapsed 
+    getSimulatedDaysElapsed,
+    clearSimulationState
   } = useDevTime()
   
   const [currentTime, setCurrentTime] = useState(getCurrentDate())
@@ -110,7 +111,7 @@ export function DevTimeDisplay() {
         <Text style={styles.time}>{formatTime(currentTime)}</Text>
         {isSimulationActive && (
           <Text style={styles.elapsed}>
-            {isAdvancing ? '⏳ Loading Day...' : `Day ${currentSimulatedDay} of simulation`}
+            {isAdvancing ? '⏳ Loading Day...' : `Day ${currentSimulatedDay + 1} of simulation`}
           </Text>
         )}
       </View>
@@ -120,9 +121,9 @@ export function DevTimeDisplay() {
           {/* Day Navigation */}
           <View style={styles.dayNavigation}>
             <TouchableOpacity 
-              style={[styles.navButton, { opacity: currentSimulatedDay === 1 || isAdvancing ? 0.3 : 1 }]}
+              style={[styles.navButton, { opacity: currentSimulatedDay === 0 || isAdvancing ? 0.3 : 1 }]}
               onPress={() => handlePreviousDay()}
-              disabled={currentSimulatedDay === 1 || isAdvancing}
+              disabled={currentSimulatedDay === 0 || isAdvancing}
             >
               <Text style={styles.navButtonText}>{isAdvancing ? '⏳ Loading...' : '◀ Previous Day'}</Text>
             </TouchableOpacity>
@@ -158,13 +159,22 @@ export function DevTimeDisplay() {
             </View>
           </View>
 
-          {/* Stop Button */}
-          <TouchableOpacity 
-            style={[styles.button, { backgroundColor: colors.error }]}
-            onPress={stopSimulation}
-          >
-            <Text style={styles.buttonText}>⏹️ Stop Simulation</Text>
-          </TouchableOpacity>
+          {/* Control Buttons */}
+          <View style={styles.controlButtons}>
+            <TouchableOpacity 
+              style={[styles.controlButton, { backgroundColor: colors.error }]}
+              onPress={stopSimulation}
+            >
+              <Text style={styles.buttonText}>⏹️ Stop</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.controlButton, { backgroundColor: colors.warning || colors.secondary }]}
+              onPress={clearSimulationState}
+            >
+              <Text style={styles.buttonText}>🧹 Reset</Text>
+            </TouchableOpacity>
+          </View>
 
           <Text style={styles.info}>
             Navigate days to test review functionality
@@ -294,5 +304,19 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.xs,
     fontWeight: TYPOGRAPHY.medium,
     color: colors.secondary,
+  },
+  controlButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  controlButton: {
+    flex: 1,
+    borderRadius: RADIUS.lg,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
+    ...SHADOWS.sm,
   },
 })

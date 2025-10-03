@@ -453,7 +453,7 @@ export default function WordInputScreen() {
               router.push('/(tabs)/')
             }
           }}>
-            <Text style={styles.cancelButton}>Cancel</Text>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
           
           <View style={styles.headerCenter}>
@@ -897,7 +897,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  cancelButton: {
+  cancelButtonText: {
     fontSize: TYPOGRAPHY.base,
     color: colors.textSecondary,
     width: 60,
@@ -1192,7 +1192,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderColor: colors.border,
     alignItems: 'center',
   },
-  cancelButtonText: {
+  cancelButtonTextStyle: {
     fontSize: TYPOGRAPHY.base,
     color: colors.textSecondary,
   },

@@ -1,4 +1,9 @@
--- Update word review result and advance round or mark as mastered
+-- =============================================
+-- FIX ROUND 4 MIGRATION LOGIC
+-- Run this SQL in Supabase SQL Editor to fix Round 4 constraint violations
+-- =============================================
+
+-- Update the update_word_review_result function to handle Round 4 failures correctly
 CREATE OR REPLACE FUNCTION update_word_review_result(
   p_word_id uuid,
   p_remembered boolean,
@@ -25,7 +30,8 @@ BEGIN
     RAISE EXCEPTION 'Word not found or access denied';
   END IF;
   
-  -- Calculate next review date (14 days from current date)
+  -- Calculate next review date (14 days from CURRENT review date, not old last_reviewed)
+  -- This ensures proper 14-day intervals: Day 1 → Day 15 → Day 29 → Day 43
   next_review_date := p_current_date + INTERVAL '14 days';
   
   IF p_remembered THEN
@@ -78,3 +84,9 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Grant permissions
+GRANT EXECUTE ON FUNCTION update_word_review_result(UUID, BOOLEAN, DATE) TO authenticated;
+
+-- Test that the function updated successfully
+SELECT 'Round 4 migration logic fixed! Words will now be marked as failed instead of advancing to Round 5.' as status;

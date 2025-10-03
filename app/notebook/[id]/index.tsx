@@ -359,6 +359,26 @@ export default function NotebookDetailsScreen() {
   }
 
   const handleActionPress = (page: PageData) => {
+    // For Silver/Gold notebooks, only allow review actions
+    const notebookLevel = notebook?.notebook_level || 'bronze'
+    
+    if (notebookLevel === 'silver' || notebookLevel === 'gold') {
+      // Silver/Gold notebooks are review-only
+      if (page.type === 'review') {
+        router.push(`/notebook/${id}/review?page=${page.pageNumber}`)
+      } else {
+        // Show alert for non-review actions in Silver/Gold
+        Alert.alert(
+          `${notebookLevel === 'silver' ? 'Silver' : 'Gold'} Notebook`,
+          `This is a ${notebookLevel} notebook. You can only review words here. New words come from ${notebookLevel === 'silver' ? 'Bronze' : 'Silver'} notebook failures.`,
+          [{ text: 'OK' }]
+        )
+      }
+      setSelectedPage(null)
+      return
+    }
+    
+    // Bronze notebook logic (original behavior)
     // Check if this is a virtual page and handle accordingly
     if (page.id.startsWith('virtual-')) {
       // For virtual pages, redirect to input to create the actual page
@@ -487,61 +507,132 @@ export default function NotebookDetailsScreen() {
                  page.type === 'review' ? 'Review' : 'Lesson'} {page.pageNumber}
               </Text>
               <Text style={styles.speechBubbleDescription}>
-                {autoFocusedPageNumber === page.pageNumber ? 
-                  // Special messaging for auto-focused pages
-                  (page.type === 'review' ? 
-                    `✨ Ready to review today's words!` :
-                    page.completedWords > 0 || page.actualWordsCount > 0 ?
-                    `✨ This page has words - ready for next review!` :
-                    `✨ Add today's ${page.wordsCount} words here!`) :
-                  // Normal messaging for manually selected pages
-                  (page.type === 'review' ? 
-                    `Words ready for review today` :
-                    page.allWordsMastered ?
-                    `All words mastered! 🎉` :
-                    page.daysUntilNextReview && page.daysUntilNextReview > 0 ?
-                    `Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` :
-                    page.status === 'completed' && page.type === 'lesson' ?
-                    `Reviewed today! Next review tomorrow` :
-                    page.completedWords > 0 || page.actualWordsCount > 0 ?
-                    `Page has words - next review coming soon` :
-                    `Add ${page.wordsCount} new words`)
-                }
+                {(() => {
+                  const notebookLevel = notebook?.notebook_level || 'bronze'
+                  
+                  // Silver/Gold notebook messaging
+                  if (notebookLevel === 'silver' || notebookLevel === 'gold') {
+                    const sourceLevel = notebookLevel === 'silver' ? 'Bronze' : 'Silver'
+                    const currentLevel = notebookLevel === 'silver' ? 'Silver' : 'Gold'
+                    
+                    if (page.type === 'review') {
+                      return autoFocusedPageNumber === page.pageNumber ? 
+                        `✨ Review all 20 ${currentLevel} words as a page!` :
+                        `Page ${page.pageNumber}: ${page.actualWordsCount} ${currentLevel} words ready for review`
+                    } else if (page.allWordsMastered) {
+                      return `Page ${page.pageNumber}: All 20 words mastered! 🎉`
+                    } else if (page.completedWords > 0 || page.actualWordsCount > 0) {
+                      const nextReviewInfo = page.daysUntilNextReview ? 
+                        ` • Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` : ''
+                      return `Page ${page.pageNumber}: ${page.actualWordsCount} ${currentLevel} words${nextReviewInfo}`
+                    } else {
+                      return `Page ${page.pageNumber}: Waiting for ${sourceLevel} Round 4 failures (need 20 words)`
+                    }
+                  }
+                  
+                  // Bronze notebook messaging (original logic)
+                  return autoFocusedPageNumber === page.pageNumber ? 
+                    // Special messaging for auto-focused pages
+                    (page.type === 'review' ? 
+                      `✨ Ready to review today's words!` :
+                      page.completedWords > 0 || page.actualWordsCount > 0 ?
+                      `✨ This page has words - ready for next review!` :
+                      `✨ Add today's ${page.wordsCount} words here!`) :
+                    // Normal messaging for manually selected pages
+                    (page.type === 'review' ? 
+                      `Words ready for review today` :
+                      page.allWordsMastered ?
+                      `All words mastered! 🎉` :
+                      page.daysUntilNextReview && page.daysUntilNextReview > 0 ?
+                      `Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` :
+                      page.status === 'completed' && page.type === 'lesson' ?
+                      `Reviewed today! Next review tomorrow` :
+                      page.completedWords > 0 || page.actualWordsCount > 0 ?
+                      `Page has words - next review coming soon` :
+                      `Add ${page.wordsCount} new words`)
+                })()}
               </Text>
-              {page.allWordsMastered ? (
-                <View style={[styles.actionButton, { backgroundColor: colors.primary, opacity: 0.7 }]}>
-                  <Text style={[styles.actionButtonText, { color: colors.cardBackground }]}>
-                    ✅ All Mastered
-                  </Text>
-                </View>
-              ) : page.daysUntilNextReview && page.daysUntilNextReview > 0 ? (
-                <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
-                  <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
-                    Next Review Day {page.daysUntilNextReview > 1 ? page.daysUntilNextReview : 'Tomorrow'}
-                  </Text>
-                </View>
-              ) : page.status === 'completed' && page.type === 'lesson' ? (
-                <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
-                  <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
-                    Already Reviewed
-                  </Text>
-                </View>
-              ) : (page.completedWords > 0 || page.actualWordsCount > 0) && page.type !== 'review' ? (
-                <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
-                  <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
-                    Page Locked
-                  </Text>
-                </View>
-              ) : (
-                <TouchableOpacity 
-                  style={styles.actionButton}
-                  onPress={() => handleActionPress(page)}
-                >
-                  <Text style={styles.actionButtonText}>
-                    {page.type === 'review' ? 'Review Now' : 'Add Words'}
-                  </Text>
-                </TouchableOpacity>
-              )}
+              {(() => {
+                const notebookLevel = notebook?.notebook_level || 'bronze'
+                
+                // Common conditions
+                if (page.allWordsMastered) {
+                  return (
+                    <View style={[styles.actionButton, { backgroundColor: colors.primary, opacity: 0.7 }]}>
+                      <Text style={[styles.actionButtonText, { color: colors.cardBackground }]}>
+                        ✅ All Mastered
+                      </Text>
+                    </View>
+                  )
+                }
+                
+                if (page.daysUntilNextReview && page.daysUntilNextReview > 0) {
+                  return (
+                    <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                      <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                        Next Review Day {page.daysUntilNextReview > 1 ? page.daysUntilNextReview : 'Tomorrow'}
+                      </Text>
+                    </View>
+                  )
+                }
+                
+                if (page.status === 'completed' && page.type === 'lesson') {
+                  return (
+                    <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                      <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                        Already Reviewed
+                      </Text>
+                    </View>
+                  )
+                }
+                
+                // Silver/Gold notebook logic
+                if (notebookLevel === 'silver' || notebookLevel === 'gold') {
+                  if (page.type === 'review') {
+                    return (
+                      <TouchableOpacity 
+                        style={styles.actionButton}
+                        onPress={() => handleActionPress(page)}
+                      >
+                        <Text style={styles.actionButtonText}>
+                          Review {notebookLevel === 'silver' ? 'Silver' : 'Gold'} Words
+                        </Text>
+                      </TouchableOpacity>
+                    )
+                  } else {
+                    // Non-review pages in Silver/Gold show disabled state
+                    return (
+                      <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                        <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                          {notebookLevel === 'silver' ? 'Silver' : 'Gold'} Review Only
+                        </Text>
+                      </View>
+                    )
+                  }
+                }
+                
+                // Bronze notebook logic (original behavior)
+                if ((page.completedWords > 0 || page.actualWordsCount > 0) && page.type !== 'review') {
+                  return (
+                    <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                      <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                        Page Locked
+                      </Text>
+                    </View>
+                  )
+                }
+                
+                return (
+                  <TouchableOpacity 
+                    style={styles.actionButton}
+                    onPress={() => handleActionPress(page)}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {page.type === 'review' ? 'Review Now' : 'Add Words'}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })()}
             </View>
             <View style={[
               styles.speechBubbleArrow,
@@ -578,12 +669,58 @@ export default function NotebookDetailsScreen() {
       {/* Shared Header */}
       <SharedHeader title={notebook.title} showBackButton={true} />
       
-      {/* Notebook Language Info */}
+      {/* Notebook Language Info and Level Badge */}
       <View style={styles.languageHeader}>
         <Text style={styles.languageFlag}>{FLAG_EMOJIS[notebook.language_code as keyof typeof FLAG_EMOJIS] || '🌍'}</Text>
         <Text style={styles.languageText}>{notebook.language}</Text>
+        {(notebook.notebook_level === 'silver' || notebook.notebook_level === 'gold') && (
+          <View style={[
+            styles.levelBadge,
+            { backgroundColor: notebook.notebook_level === 'silver' ? colors.info + '20' : colors.warning + '20' }
+          ]}>
+            <Text style={[
+              styles.levelBadgeText,
+              { color: notebook.notebook_level === 'silver' ? colors.info : colors.warning }
+            ]}>
+              {notebook.notebook_level === 'silver' ? '🥈 SILVER' : '🥇 GOLD'} NOTEBOOK
+            </Text>
+          </View>
+        )}
       </View>
 
+
+      {/* Page-based Progress Summary for Silver/Gold */}
+      {(notebook.notebook_level === 'silver' || notebook.notebook_level === 'gold') && (
+        <View style={styles.pageProgressSummary}>
+          <Text style={styles.pageProgressTitle}>
+            {notebook.notebook_level === 'silver' ? 'Silver' : 'Gold'} Notebook Progress
+          </Text>
+          <Text style={styles.pageProgressSubtitle}>
+            Page-based reviews • 20 words per page
+          </Text>
+          
+          <View style={styles.pageProgressStats}>
+            <View style={styles.pageProgressStat}>
+              <Text style={styles.pageProgressStatValue}>
+                {pathData.filter(p => p.actualWordsCount > 0).length}
+              </Text>
+              <Text style={styles.pageProgressStatLabel}>Active Pages</Text>
+            </View>
+            <View style={styles.pageProgressStat}>
+              <Text style={styles.pageProgressStatValue}>
+                {pathData.filter(p => p.type === 'review').length}
+              </Text>
+              <Text style={styles.pageProgressStatLabel}>Reviews Due</Text>
+            </View>
+            <View style={styles.pageProgressStat}>
+              <Text style={styles.pageProgressStatValue}>
+                {pathData.filter(p => p.allWordsMastered).length}
+              </Text>
+              <Text style={styles.pageProgressStatLabel}>Completed</Text>
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* Learning Path */}
       <ScrollView ref={scrollViewRef} style={styles.scrollView} contentContainerStyle={styles.pathContainer}>
@@ -792,6 +929,61 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.sm,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.cardBackground,
+    textAlign: 'center',
+  },
+
+  // Level badge styles
+  levelBadge: {
+    borderRadius: RADIUS.sm,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    marginLeft: SPACING.md,
+  },
+  levelBadgeText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: TYPOGRAPHY.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  // Page progress summary styles
+  pageProgressSummary: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginHorizontal: SPACING.xl,
+    marginBottom: SPACING.lg,
+    ...SHADOWS.sm,
+  },
+  pageProgressTitle: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.textPrimary,
+    textAlign: 'center',
+    marginBottom: SPACING.xs,
+  },
+  pageProgressSubtitle: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: SPACING.lg,
+  },
+  pageProgressStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  pageProgressStat: {
+    alignItems: 'center',
+  },
+  pageProgressStatValue: {
+    fontSize: TYPOGRAPHY['2xl'],
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.primary,
+    marginBottom: SPACING.xs,
+  },
+  pageProgressStatLabel: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
 })

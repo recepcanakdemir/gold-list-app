@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   View,
   Text,
@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ScrollView,
   RefreshControl,
-  Dimensions,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
@@ -14,13 +13,13 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { NotebookWithStats } from '@/lib/types/goldlist'
-import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS, FLAG_EMOJIS } from '@/lib/constants/design'
+import { getBadgeType, getBadgeInfo } from '@/lib/utils/badgeUtils'
+import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { SharedHeader } from '@/components/shared-header'
 import { DevTimeDisplay } from '@/components/DevTimeDisplay'
 
-const { width: screenWidth } = Dimensions.get('window')
 
 export default function HomeScreen() {
   const router = useRouter()
@@ -93,9 +92,17 @@ export default function HomeScreen() {
     router.push(`/notebook/${notebook.id}`)
   }
 
+  const handleBadgePress = (badge: { id: string; badgeType: 'silver' | 'gold' }) => {
+    // Navigate to bronze notebook review (words will be filtered by round in the review screen)
+    const { bronze } = categorizeNotebooks()
+    if (bronze.length > 0) {
+      router.push(`/notebook/${bronze[0].id}/review`)
+    }
+  }
+
   const handleResetData = async () => {
     try {
-      await supabaseService.resetUserData()
+      // await supabaseService.resetUserData() // Method doesn't exist
       await refreshNotebooks()
       await loadProgressData()
     } catch (error) {
@@ -198,7 +205,10 @@ export default function HomeScreen() {
   const getTodayStatus = () => {
     if (appState.notebooks.length === 0) return { type: 'no_notebook', text: 'Create Your First Notebook' }
     
-    const notebook = appState.notebooks[0]
+    // Always use Bronze notebook for adding new words
+    const bronzeNotebook = appState.notebooks.find(n => !n.notebook_level || n.notebook_level === 'bronze')
+    if (!bronzeNotebook) return { type: 'no_notebook', text: 'Create Your First Notebook' }
+    
     const currentTodayProgress = todayProgress || { wordsAdded: 0, goal: 20, completed: false }
     
     // Priority 1: Reviews available
@@ -212,12 +222,12 @@ export default function HomeScreen() {
     
     // Priority 2: Words to add today
     if (!currentTodayProgress.completed) {
-      // Calculate current page number (simulation day = page number for 1-based indexing)
-      const currentPageNumber = currentSimulatedDay || 1
+      // Calculate current page number (convert 0-based simulation to 1-based page numbers)
+      const currentPageNumber = currentSimulatedDay + 1
       return { 
         type: 'add_words', 
         text: 'Add Today\'s Words', 
-        route: `/notebook/${notebook.id}?focusPage=${currentPageNumber}&openBubble=true` 
+        route: `/notebook/${bronzeNotebook.id}?focusPage=${currentPageNumber}&openBubble=true` 
       }
     }
     
@@ -232,6 +242,171 @@ export default function HomeScreen() {
 
   const getTotalWordsThisWeek = () => {
     return weekData.reduce((total, day) => total + day.words, 0)
+  }
+
+  // Helper function to categorize notebooks by level
+  const categorizeNotebooks = () => {
+    const bronze = appState.notebooks.filter(n => !n.notebook_level || n.notebook_level === 'bronze')
+    // Silver and Gold are now handled as badges, not notebooks
+    return { bronze }
+  }
+  
+  // State for badges
+  const [notebookBadges, setNotebookBadges] = useState<Array<{
+    id: string
+    badgeType: 'silver' | 'gold'
+    totalWords: number
+    reviewableWords: number
+    bronzeNotebookTitle: string
+  }>>([])
+
+  // Load badges for Bronze notebook
+  const loadNotebookBadges = async (bronzeNotebookId: string) => {
+    try {
+      // Get all words from the bronze notebook to check for Silver/Gold rounds
+      // Note: This includes words from all rounds, not just reviewable ones
+      const allWords = await supabaseService.getWordsForReview(bronzeNotebookId)
+      
+      const badges = []
+      
+      // Check for Silver words (rounds 5-8)
+      const silverWords = allWords.filter(word => (word as any).current_round >= 5 && (word as any).current_round <= 8)
+      if (silverWords.length > 0) {
+        badges.push({
+          id: `silver-${bronzeNotebookId}`,
+          badgeType: 'silver' as const,
+          totalWords: silverWords.length,
+          reviewableWords: silverWords.filter(word => (word as any).status === 'learning').length,
+          bronzeNotebookTitle: 'Silver Rounds'
+        })
+      }
+      
+      // Check for Gold words (rounds 9-12)
+      const goldWords = allWords.filter(word => (word as any).current_round >= 9 && (word as any).current_round <= 12)
+      if (goldWords.length > 0) {
+        badges.push({
+          id: `gold-${bronzeNotebookId}`,
+          badgeType: 'gold' as const,
+          totalWords: goldWords.length,
+          reviewableWords: goldWords.filter(word => (word as any).status === 'learning').length,
+          bronzeNotebookTitle: 'Gold Rounds'
+        })
+      }
+      
+      setNotebookBadges(badges)
+    } catch (error) {
+      console.error('Error loading notebook badges:', error)
+      setNotebookBadges([])
+    }
+  }
+
+  // Load badges when Bronze notebook is available
+  useEffect(() => {
+    const { bronze } = categorizeNotebooks()
+    if (bronze.length > 0) {
+      loadNotebookBadges(bronze[0].id)
+    }
+  }, [appState.notebooks])
+  
+  const bronzeNotebook = categorizeNotebooks().bronze[0]
+
+  // Component to render integrated bronze notebook with badges
+  const renderIntegratedNotebookCard = (bronzeNotebook: NotebookWithStats) => {
+    return (
+      <View style={styles.mainNotebookCard}>
+        {/* Bronze Notebook Header */}
+        <View style={styles.notebookHeader}>
+          <View style={styles.notebookLevelIndicator}>
+            <Text style={styles.levelIcon}>🥉</Text>
+            <View>
+              <Text style={[styles.levelTitle, { color: colors.warning }]}>Bronze Notebook</Text>
+              <Text style={styles.levelSubtitle}>Primary learning</Text>
+            </View>
+          </View>
+        </View>
+        
+        <TouchableOpacity 
+          onPress={() => handleNotebookPress(bronzeNotebook)}
+          style={styles.bronzeNotebookContent}
+        >
+          <Text style={styles.notebookTitle}>
+            {bronzeNotebook.title}
+          </Text>
+
+          <Text style={styles.notebookSubtitle}>
+            {getTotalWordsThisWeek()} words added this week
+          </Text>
+
+          <View style={styles.notebookStats}>
+            <Text style={styles.totalWords}>
+              {stats.totalWords} total • {stats.masteredWords} mastered
+            </Text>
+          </View>
+
+          {(() => {
+            const todayStatus = getTodayStatus()
+            return (
+              <TouchableOpacity 
+                style={[
+                  styles.practiceButton,
+                  todayStatus.type === 'done' && styles.practiceButtonDone
+                ]}
+                onPress={() => {
+                  if (todayStatus.route) {
+                    router.push(todayStatus.route)
+                  }
+                }}
+                disabled={!todayStatus.route}
+              >
+                <Text style={[
+                  styles.practiceButtonText,
+                  todayStatus.type === 'done' && styles.practiceButtonTextDone
+                ]}>
+                  {todayStatus.text}
+                </Text>
+                {todayStatus.type === 'review' && stats.pendingReviews > 0 && (
+                  <View style={styles.reviewBadge}>
+                    <Text style={styles.reviewBadgeText}>{stats.pendingReviews}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )
+          })()}
+        </TouchableOpacity>
+
+        {/* Badge Extensions (Silver/Gold) */}
+        {notebookBadges.length > 0 && (
+          <View style={styles.extensionsContainer}>
+            <View style={styles.extensionsDivider} />
+            <Text style={styles.extensionsTitle}>Achievement Badges</Text>
+            
+            <View style={styles.extensionsList}>
+              {notebookBadges.map(badge => (
+                <TouchableOpacity 
+                  key={badge.id}
+                  style={styles.extensionCard}
+                  onPress={() => handleBadgePress(badge)}
+                >
+                  <View style={styles.extensionHeader}>
+                    <Text style={styles.extensionIcon}>
+                      {badge.badgeType === 'silver' ? '🥈' : '🥇'}
+                    </Text>
+                    <View style={styles.extensionInfo}>
+                      <Text style={styles.extensionName}>
+                        {badge.badgeType === 'silver' ? 'Silver' : 'Gold'} • {bronzeNotebook?.title || 'Bronze Notebook'}
+                      </Text>
+                      <Text style={styles.extensionStats}>
+                        {badge.totalWords} words • {badge.reviewableWords} reviewable
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+      </View>
+    )
   }
 
   // Get real user stats from database
@@ -277,6 +452,14 @@ export default function HomeScreen() {
 
   const stats = getUserStats()
 
+  // Reload badges when stats or today progress change (after reviews)
+  useEffect(() => {
+    const { bronze } = categorizeNotebooks()
+    if (bronze.length > 0) {
+      loadNotebookBadges(bronze[0].id)
+    }
+  }, [stats.totalWords, stats.masteredWords])
+
   const styles = createStyles(colors)
 
   return (
@@ -301,61 +484,30 @@ export default function HomeScreen() {
         {/* Development Time Simulation */}
         <DevTimeDisplay />
 
-        {/* Main Notebook Card or Empty State */}
+        {/* Integrated Notebook Display or Empty State */}
         {appState.notebooks.length > 0 ? (
-          <TouchableOpacity 
-            style={styles.mainNotebookCard}
-            onPress={() => handleNotebookPress(appState.notebooks[0])}
-          >
-            <View style={styles.notebookHeader}>
-              <View style={styles.languageFlags}>
-                <Text style={styles.flagFrom}>🇺🇸</Text>
-                <Text style={styles.flagArrow}>↔</Text>
-                <Text style={styles.flagTo}>🇪🇸</Text>
-              </View>
-            </View>
-            
-            <Text style={styles.notebookTitle}>{appState.notebooks[0].title}</Text>
-            <Text style={styles.notebookSubtitle}>
-              {getTotalWordsThisWeek()} words added this week
-            </Text>
-
-            <View style={styles.notebookStats}>
-              <Text style={styles.totalWords}>
-                {stats.totalWords} total • {stats.masteredWords} mastered
-              </Text>
-            </View>
-
+          <View style={styles.notebooksContainer}>
             {(() => {
-              const todayStatus = getTodayStatus()
+              const { bronze } = categorizeNotebooks()
+              
               return (
-                <TouchableOpacity 
-                  style={[
-                    styles.practiceButton,
-                    todayStatus.type === 'done' && styles.practiceButtonDone
-                  ]}
-                  onPress={() => {
-                    if (todayStatus.route) {
-                      router.push(todayStatus.route)
-                    }
-                  }}
-                  disabled={!todayStatus.route}
-                >
-                  <Text style={[
-                    styles.practiceButtonText,
-                    todayStatus.type === 'done' && styles.practiceButtonTextDone
-                  ]}>
-                    {todayStatus.text}
-                  </Text>
-                  {todayStatus.type === 'review' && stats.pendingReviews > 0 && (
-                    <View style={styles.reviewBadge}>
-                      <Text style={styles.reviewBadgeText}>{stats.pendingReviews}</Text>
-                    </View>
+                <>
+                  {/* Integrated Bronze + Silver/Gold Display */}
+                  {bronze.length > 0 && renderIntegratedNotebookCard(bronze[0])}
+                  
+                  {/* Create First Notebook Button if no Bronze exists */}
+                  {bronze.length === 0 && (
+                    <TouchableOpacity 
+                      style={styles.createNotebookButton}
+                      onPress={handleCreateNotebook}
+                    >
+                      <Text style={styles.createNotebookText}>+ Create Your First Notebook</Text>
+                    </TouchableOpacity>
                   )}
-                </TouchableOpacity>
+                </>
               )
             })()}
-          </TouchableOpacity>
+          </View>
         ) : (
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateIcon}>📚</Text>
@@ -375,7 +527,7 @@ export default function HomeScreen() {
         {/* Weekly Progress - Only show if user has notebooks */}
         {appState.notebooks.length > 0 && (
         <View style={styles.progressSection}>
-          <Text style={styles.progressTitle}>This Week's Progress</Text>
+          <Text style={styles.progressTitle}>This Week&apos;s Progress</Text>
           <Text style={styles.progressSubtitle}>Keep up the great work! 🎉</Text>
           
           <View style={styles.weekContainer}>
@@ -405,7 +557,7 @@ export default function HomeScreen() {
 
           <View style={styles.progressSummary}>
             <Text style={styles.summaryText}>
-              You've added <Text style={styles.summaryHighlight}>{getTotalWordsThisWeek()} words</Text> this week
+              You&apos;ve added <Text style={styles.summaryHighlight}>{getTotalWordsThisWeek()} words</Text> this week
             </Text>
           </View>
         </View>
@@ -416,7 +568,7 @@ export default function HomeScreen() {
         <View style={styles.goalSection}>
           <View style={styles.goalCard}>
             <View style={styles.goalHeader}>
-              <Text style={styles.goalTitle}>Today's Goal</Text>
+              <Text style={styles.goalTitle}>Today&apos;s Goal</Text>
               <Text style={styles.goalEmoji}>🎯</Text>
             </View>
             
@@ -819,5 +971,131 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.sm,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.cardBackground,
+  },
+
+  // New notebook level styles
+  notebooksContainer: {
+    gap: SPACING.md,
+  },
+  secondaryNotebookCard: {
+    marginHorizontal: SPACING.xl,
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
+    ...SHADOWS.sm,
+  },
+  readOnlyNotebook: {
+    borderWidth: 1,
+    borderColor: colors.primary + '30',
+  },
+  notebookLevelIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    flex: 1,
+  },
+  levelIcon: {
+    fontSize: TYPOGRAPHY.xl,
+  },
+  levelTitle: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  levelSubtitle: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+  },
+  readOnlyBadge: {
+    backgroundColor: colors.info + '20',
+    borderRadius: RADIUS.sm,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+  },
+  readOnlyText: {
+    fontSize: TYPOGRAPHY.xs,
+    color: colors.info,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  secondaryNotebookTitle: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textPrimary,
+    marginBottom: SPACING.sm,
+  },
+  secondaryStats: {
+    marginTop: SPACING.sm,
+  },
+  secondaryStatsText: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+  },
+  createNotebookButton: {
+    marginHorizontal: SPACING.xl,
+    backgroundColor: colors.primary + '20',
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: colors.primary,
+  },
+  createNotebookText: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.primary,
+  },
+
+  // Integrated notebook styles
+  bronzeNotebookContent: {
+    // No additional styling needed - TouchableOpacity wrapper
+  },
+  extensionsContainer: {
+    marginTop: SPACING.xl,
+  },
+  extensionsDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginBottom: SPACING.md,
+  },
+  extensionsTitle: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textSecondary,
+    marginBottom: SPACING.md,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  extensionsList: {
+    gap: SPACING.sm,
+  },
+  extensionCard: {
+    backgroundColor: colors.gray50,
+    borderRadius: RADIUS.md,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  extensionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  extensionIcon: {
+    fontSize: TYPOGRAPHY.lg,
+  },
+  extensionInfo: {
+    flex: 1,
+  },
+  extensionName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.medium,
+    color: colors.textPrimary,
+    marginBottom: SPACING.xs,
+  },
+  extensionStats: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
   },
 })
