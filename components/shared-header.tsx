@@ -20,7 +20,13 @@ export function SharedHeader({ title, showBackButton = false }: SharedHeaderProp
     <View style={styles.header}>
       {showBackButton ? (
         <>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <TouchableOpacity onPress={() => {
+            if (router.canGoBack()) {
+              router.back()
+            } else {
+              router.push('/(tabs)/')
+            }
+          }} style={styles.backButton}>
             <Text style={styles.backButtonText}>←</Text>
           </TouchableOpacity>
           <View style={styles.centerTitle}>
@@ -34,7 +40,7 @@ export function SharedHeader({ title, showBackButton = false }: SharedHeaderProp
       <View style={styles.headerRight}>
         <View style={styles.streakContainer}>
           <Text style={styles.streakIcon}>🔥</Text>
-          <Text style={styles.streakCount}>{profile?.streak_count || 12}</Text>
+          <Text style={styles.streakCount}>{profile?.streak_count || 0}</Text>
         </View>
         <TouchableOpacity style={styles.notificationButton} onPress={() => router.push('/modal/notifications')}>
           <View style={styles.notificationIcon}>

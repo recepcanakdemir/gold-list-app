@@ -9,7 +9,7 @@ import {
   InputSession,
   OnboardingProgress 
 } from '../types/goldlist'
-import { mockDataService } from '../services/mockData'
+import { supabaseService } from '../services/supabaseService'
 
 interface AppContextType {
   appState: AppState
@@ -55,7 +55,7 @@ interface AppProviderProps {
 }
 
 export function AppProvider({ children }: AppProviderProps) {
-  const { user, profile } = useAuth()
+  const { user, profile, refreshProfile } = useAuth()
   const [appState, setAppState] = useState<AppState>({
     user: null,
     notebooks: [],
@@ -120,12 +120,19 @@ export function AppProvider({ children }: AppProviderProps) {
     if (!user?.id) return
 
     try {
-      const notebooks = await mockDataService.getNotebooks()
+      // Unlock today's pages first
+      await supabaseService.unlockTodaysPages()
+      
+      // Then load notebooks
+      const notebooks = await supabaseService.getNotebooks()
       setAppState(prev => ({ 
         ...prev, 
         notebooks,
         lastSyncTime: new Date()
       }))
+
+      // Also refresh profile to get updated stats
+      await refreshProfile()
     } catch (error) {
       console.error('Error loading notebooks:', error)
       setAppState(prev => ({ ...prev, isOffline: true }))

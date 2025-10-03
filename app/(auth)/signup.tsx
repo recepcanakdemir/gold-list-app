@@ -5,12 +5,12 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { COLORS, TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
@@ -47,18 +47,14 @@ export default function SignUpScreen() {
 
     setLoading(true)
     try {
-      const { error } = await signUp(email, password)
-      if (error) {
-        Alert.alert('Sign Up Failed', error.message)
-      } else {
-        Alert.alert(
-          'Success!',
-          'Account created successfully. Please check your email for verification.',
-          [{ text: 'OK', onPress: () => router.replace('/(onboarding)/goldlist-intro') }]
-        )
-      }
-    } catch (error) {
-      Alert.alert('Error', 'An unexpected error occurred')
+      await signUp(email, password)
+      Alert.alert(
+        'Success!',
+        'Account created successfully. Please check your email for verification.',
+        [{ text: 'OK', onPress: () => router.replace('/(onboarding)/goldlist-intro') }]
+      )
+    } catch (error: any) {
+      Alert.alert('Sign Up Failed', error.message || 'An unexpected error occurred')
     } finally {
       setLoading(false)
     }

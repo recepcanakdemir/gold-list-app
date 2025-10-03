@@ -7,13 +7,14 @@ import { profileOperations } from '../supabase/operations'
 interface AuthContextType {
   session: Session | null
   user: User | null
-  profile: Tables<'profiles'> | null
+  profile: Tables<'profiles'>['Row'] | null
   loading: boolean
   signUp: (email: string, password: string) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   signInWithGoogle: () => Promise<void>
   signInWithApple: () => Promise<void>
+  refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -32,7 +33,7 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<Session | null>(null)
-  const [profile, setProfile] = useState<Tables<'profiles'> | null>(null)
+  const [profile, setProfile] = useState<Tables<'profiles'>['Row'] | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -83,6 +84,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setProfile(userProfile)
     } catch (error) {
       console.error('Error loading profile:', error)
+    }
+  }
+
+  // Function to refresh profile data
+  async function refreshProfile() {
+    if (session?.user?.id) {
+      await loadProfile(session.user.id)
     }
   }
 
@@ -166,6 +174,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signOut,
     signInWithGoogle,
     signInWithApple,
+    refreshProfile,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

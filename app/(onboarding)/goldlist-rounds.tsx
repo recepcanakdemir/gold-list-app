@@ -4,9 +4,9 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useApp } from '@/lib/contexts/AppContext'
 import { ROUND_COLORS, NOTEBOOK_LEVEL_COLORS } from '@/lib/types/goldlist'
@@ -120,7 +120,7 @@ export default function GoldListRoundsScreen() {
                 <Text style={styles.notebookTitle}>Silver Notebook</Text>
               </View>
               <Text style={styles.notebookDescription}>
-                Words that didn't stick in Bronze get more focused attention here.
+                Words that didn&apos;t stick in Bronze get more focused attention here.
               </Text>
             </View>
 

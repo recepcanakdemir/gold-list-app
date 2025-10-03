@@ -20,7 +20,7 @@ BEGIN
     RAISE EXCEPTION 'Notebook not found or access denied';
   END IF;
   
-  -- Calculate review date (14 days from now)
+  -- Calculate review date (14 days from now)  
   review_date := CURRENT_DATE + INTERVAL '14 days';
   
   -- Insert each word

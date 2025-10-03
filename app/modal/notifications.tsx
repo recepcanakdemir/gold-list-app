@@ -5,8 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  SafeAreaView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
@@ -181,7 +181,7 @@ export default function NotificationsScreen() {
             <Text style={styles.emptyIcon}>🔔</Text>
             <Text style={styles.emptyTitle}>No notifications yet</Text>
             <Text style={styles.emptyMessage}>
-              We'll notify you about your learning progress and achievements.
+              We&apos;ll notify you about your learning progress and achievements.
             </Text>
           </View>
         )}

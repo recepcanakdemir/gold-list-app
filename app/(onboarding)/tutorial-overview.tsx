@@ -4,8 +4,8 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useApp } from '@/lib/contexts/AppContext'
 
@@ -20,7 +20,7 @@ export default function TutorialOverviewScreen() {
 
   const handleTutorial = async () => {
     await updateOnboardingProgress({ currentStep: 5 })
-    router.push('/(onboarding)/tutorial-input')
+    router.push('/(tabs)')
   }
 
   return (
@@ -81,7 +81,7 @@ export default function TutorialOverviewScreen() {
 
         {/* Benefits */}
         <View style={styles.benefits}>
-          <Text style={styles.benefitsTitle}>What you'll get:</Text>
+          <Text style={styles.benefitsTitle}>What you&apos;ll get:</Text>
           <View style={styles.benefit}>
             <Text style={styles.benefitIcon}>📱</Text>
             <Text style={styles.benefitText}>Clean, intuitive interface</Text>

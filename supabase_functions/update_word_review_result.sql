@@ -1,7 +1,8 @@
 -- Update word review result and advance round or mark as mastered
 CREATE OR REPLACE FUNCTION update_word_review_result(
   p_word_id uuid,
-  p_remembered boolean
+  p_remembered boolean,
+  p_current_date date DEFAULT CURRENT_DATE
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -10,11 +11,12 @@ AS $$
 DECLARE
   current_word_round integer;
   word_notebook_id uuid;
+  word_page_id uuid;
   next_review_date date;
 BEGIN
   -- Get current word info and verify ownership
-  SELECT w.current_round, w.notebook_id
-  INTO current_word_round, word_notebook_id
+  SELECT w.current_round, w.notebook_id, w.page_id
+  INTO current_word_round, word_notebook_id, word_page_id
   FROM words w
   JOIN notebooks n ON w.notebook_id = n.id
   WHERE w.id = p_word_id AND n.user_id = auth.uid();
@@ -23,46 +25,56 @@ BEGIN
     RAISE EXCEPTION 'Word not found or access denied';
   END IF;
   
-  -- Calculate next review date (14 days from today)
-  next_review_date := CURRENT_DATE + INTERVAL '14 days';
+  -- Calculate next review date (14 days from current date)
+  next_review_date := p_current_date + INTERVAL '14 days';
   
   IF p_remembered THEN
-    -- Word was remembered
+    -- Remembered words are mastered and removed from future reviews
+    UPDATE words 
+    SET 
+      is_mastered = true,
+      status = 'mastered',
+      times_reviewed = times_reviewed + 1,
+      last_reviewed = p_current_date,
+      updated_at = NOW()
+      -- No review_date needed - they're done forever
+    WHERE id = p_word_id;
+  ELSE
+    -- Check if this is a Round 4 failure that should trigger Silver migration
     IF current_word_round >= 4 THEN
-      -- Word is mastered after round 4
+      -- Round 4 failures should be marked as 'failed' and handled by Silver migration
       UPDATE words 
       SET 
-        is_mastered = true,
+        status = 'failed',
+        -- Don't advance round - leave at 4 and let Silver migration handle it
+        current_round = current_word_round,
+        -- No next review date - they'll be migrated to Silver
         times_reviewed = times_reviewed + 1,
-        last_reviewed = CURRENT_DATE,
+        last_reviewed = p_current_date,
         updated_at = NOW()
       WHERE id = p_word_id;
     ELSE
-      -- Advance to next round
+      -- Forgotten words advance to next round by 1 (Rounds 1-3)
       UPDATE words 
       SET 
         current_round = current_word_round + 1,
         review_date = next_review_date,
+        status = 'learning',
         times_reviewed = times_reviewed + 1,
-        last_reviewed = CURRENT_DATE,
+        last_reviewed = p_current_date,
         updated_at = NOW()
       WHERE id = p_word_id;
     END IF;
-  ELSE
-    -- Word was not remembered, reset to round 1
-    UPDATE words 
-    SET 
-      current_round = 1,
-      review_date = next_review_date,
-      times_reviewed = times_reviewed + 1,
-      last_reviewed = CURRENT_DATE,
-      updated_at = NOW()
-    WHERE id = p_word_id;
   END IF;
   
   -- Update notebook's last activity
   UPDATE notebooks 
   SET updated_at = NOW() 
   WHERE id = word_notebook_id;
+  
+  -- Update the page's target_round and next_review_date
+  IF word_page_id IS NOT NULL THEN
+    PERFORM update_page_after_review(word_page_id);
+  END IF;
 END;
 $$;

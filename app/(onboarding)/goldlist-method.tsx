@@ -4,9 +4,9 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useApp } from '@/lib/contexts/AppContext'
 
@@ -58,7 +58,7 @@ export default function GoldListMethodScreen() {
               <View style={styles.stepExample}>
                 <Text style={styles.stepExampleTitle}>Example:</Text>
                 <Text style={styles.stepExampleText}>
-                  "Serendipity" - The occurrence of events by chance in a happy way
+                  &ldquo;Serendipity&rdquo; - The occurrence of events by chance in a happy way
                 </Text>
               </View>
             </View>
@@ -111,8 +111,8 @@ export default function GoldListMethodScreen() {
             <Text style={styles.insightIcon}>💎</Text>
             <Text style={styles.insightTitle}>The Magic</Text>
             <Text style={styles.insightText}>
-              Most words stick after just one cycle! Words that don't simply need more time.
-              No word is truly "difficult" - just not ready yet.
+              Most words stick after just one cycle! Words that don&apos;t simply need more time.
+              No word is truly &ldquo;difficult&rdquo; - just not ready yet.
             </Text>
           </View>
 

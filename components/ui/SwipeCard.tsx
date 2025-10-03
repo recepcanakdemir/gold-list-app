@@ -4,10 +4,9 @@ import {
   Text,
   StyleSheet,
   Animated,
-  PanGestureHandler,
-  State,
   Dimensions,
 } from 'react-native'
+import { PanGestureHandler, State } from 'react-native-gesture-handler'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25
@@ -99,7 +98,7 @@ export default function SwipeCard({
   return (
     <PanGestureHandler
       onGestureEvent={handleGesture}
-      onHandlerStateChange={(event) => {
+      onHandlerStateChange={(event: any) => {
         if (event.nativeEvent.state === State.END) {
           handleGestureEnd(event)
         }

@@ -5,24 +5,43 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   Alert,
   Modal,
   FlatList,
   Animated,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
-import { mockDataService, languageOptions } from '@/lib/services/mockData'
+import { supabaseService } from '@/lib/services/supabaseService'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
+
+// Language options for notebook creation
+const languageOptions = [
+  { code: 'es', name: 'Spanish', flag: '🇪🇸' },
+  { code: 'fr', name: 'French', flag: '🇫🇷' },
+  { code: 'de', name: 'German', flag: '🇩🇪' },
+  { code: 'it', name: 'Italian', flag: '🇮🇹' },
+  { code: 'pt', name: 'Portuguese', flag: '🇵🇹' },
+  { code: 'ja', name: 'Japanese', flag: '🇯🇵' },
+  { code: 'ko', name: 'Korean', flag: '🇰🇷' },
+  { code: 'zh', name: 'Chinese', flag: '🇨🇳' },
+  { code: 'ar', name: 'Arabic', flag: '🇸🇦' },
+  { code: 'ru', name: 'Russian', flag: '🇷🇺' },
+  { code: 'hi', name: 'Hindi', flag: '🇮🇳' },
+  { code: 'th', name: 'Thai', flag: '🇹🇭' },
+  { code: 'vi', name: 'Vietnamese', flag: '🇻🇳' },
+  { code: 'nl', name: 'Dutch', flag: '🇳🇱' },
+  { code: 'sv', name: 'Swedish', flag: '🇸🇪' },
+]
 
 export default function CreateNotebookModal() {
   const router = useRouter()
   const { profile } = useAuth()
-  const { appState } = useApp()
+  const { appState, refreshNotebooks } = useApp()
   const { colors } = useTheme()
   const [title, setTitle] = useState('')
   const [selectedLanguage, setSelectedLanguage] = useState<{
@@ -63,7 +82,11 @@ export default function CreateNotebookModal() {
           { 
             text: 'Upgrade', 
             onPress: () => {
-              router.back()
+              if (router.canGoBack()) {
+                router.back()
+              } else {
+                router.push('/(tabs)/')
+              }
               router.push('/modal/paywall')
             }
           }
@@ -74,19 +97,29 @@ export default function CreateNotebookModal() {
 
     setLoading(true)
     try {
-      await mockDataService.createNotebook({
+      await supabaseService.createNotebook({
         title: title.trim(),
         language: selectedLanguage.name,
         language_code: selectedLanguage.code,
         words_per_day: wordsPerDay,
       })
 
+      // Refresh the notebooks list in the app state
+      await refreshNotebooks()
+
       Alert.alert(
         'Success!',
         'Your notebook has been created. You can now start adding vocabulary.',
-        [{ text: 'OK', onPress: () => router.back() }]
+        [{ text: 'OK', onPress: () => {
+          if (router.canGoBack()) {
+            router.back()
+          } else {
+            router.push('/(tabs)/')
+          }
+        } }]
       )
     } catch (error) {
+      console.error('Error creating notebook:', error)
       Alert.alert('Error', 'Failed to create notebook. Please try again.')
     } finally {
       setLoading(false)
@@ -116,7 +149,13 @@ export default function CreateNotebookModal() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => {
+          if (router.canGoBack()) {
+            router.back()
+          } else {
+            router.push('/(tabs)/')
+          }
+        }}>
           <Text style={styles.cancelButton}>Cancel</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>New Notebook</Text>

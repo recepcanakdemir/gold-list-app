@@ -6,8 +6,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
-  SafeAreaView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Link, useRouter } from 'expo-router'
 import { supabase } from '@/lib/supabase/client'
 
@@ -44,10 +44,10 @@ export default function ForgotPasswordScreen() {
             <Text style={styles.successIcon}>📧</Text>
             <Text style={styles.successTitle}>Check Your Email</Text>
             <Text style={styles.successText}>
-              We've sent a password reset link to {email}
+              We&apos;ve sent a password reset link to {email}
             </Text>
             <Text style={styles.successSubtext}>
-              Click the link in the email to reset your password. If you don't see the email, check your spam folder.
+              Click the link in the email to reset your password. If you don&apos;t see the email, check your spam folder.
             </Text>
             
             <TouchableOpacity
@@ -69,7 +69,7 @@ export default function ForgotPasswordScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>Reset Password</Text>
           <Text style={styles.subtitle}>
-            Enter your email address and we'll send you a link to reset your password
+            Enter your email address and we&apos;ll send you a link to reset your password
           </Text>
         </View>
 

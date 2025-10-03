@@ -1,5 +1,5 @@
 import { supabase } from './client'
-import { Tables } from '../types/database'
+import { Tables, Database } from '../types/database'
 import { NotebookWithStats, WordWithReviews, PageWithWords } from '../types/goldlist'
 
 // Notebook operations
@@ -52,7 +52,7 @@ export const notebookOperations = {
     })
   },
 
-  async create(data: Tables<'notebooks'>['Insert']): Promise<Tables<'notebooks'>> {
+  async create(data: Tables<'notebooks'>['Insert']): Promise<Tables<'notebooks'>['Row']> {
     const { data: notebook, error } = await supabase
       .from('notebooks')
       .insert(data)
@@ -63,7 +63,7 @@ export const notebookOperations = {
     return notebook
   },
 
-  async update(id: string, data: Tables<'notebooks'>['Update']): Promise<Tables<'notebooks'>> {
+  async update(id: string, data: Tables<'notebooks'>['Update']): Promise<Tables<'notebooks'>['Row']> {
     const { data: notebook, error } = await supabase
       .from('notebooks')
       .update(data)
@@ -102,7 +102,7 @@ export const pageOperations = {
     return data as PageWithWords[]
   },
 
-  async create(data: Tables<'pages'>['Insert']): Promise<Tables<'pages'>> {
+  async create(data: Tables<'pages'>['Insert']): Promise<Tables<'pages'>['Row']> {
     const { data: page, error } = await supabase
       .from('pages')
       .insert(data)
@@ -211,7 +211,7 @@ export const wordOperations = {
 
 // Review operations
 export const reviewOperations = {
-  async create(data: Tables<'reviews'>['Insert']): Promise<Tables<'reviews'>> {
+  async create(data: Tables<'reviews'>['Insert']): Promise<Tables<'reviews'>['Row']> {
     const { data: review, error } = await supabase
       .from('reviews')
       .insert(data)
@@ -236,7 +236,7 @@ export const reviewOperations = {
 
 // Profile operations
 export const profileOperations = {
-  async get(userId: string): Promise<Tables<'profiles'> | null> {
+  async get(userId: string): Promise<Tables<'profiles'>['Row'] | null> {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
@@ -247,7 +247,7 @@ export const profileOperations = {
     return data
   },
 
-  async create(data: Tables<'profiles'>['Insert']): Promise<Tables<'profiles'>> {
+  async create(data: Tables<'profiles'>['Insert']): Promise<Tables<'profiles'>['Row']> {
     const { data: profile, error } = await supabase
       .from('profiles')
       .insert(data)
@@ -258,7 +258,7 @@ export const profileOperations = {
     return profile
   },
 
-  async updateStats(userId: string, updates: Partial<Tables<'profiles'>>): Promise<void> {
+  async updateStats(userId: string, updates: Partial<Tables<'profiles'>['Update']>): Promise<void> {
     const { error } = await supabase
       .from('profiles')
       .update(updates)
