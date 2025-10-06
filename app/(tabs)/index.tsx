@@ -6,28 +6,34 @@ import {
   StyleSheet,
   ScrollView,
   RefreshControl,
+  Dimensions,
 } from 'react-native'
+import CountryFlag from 'react-native-country-flag'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { NotebookWithStats } from '@/lib/types/goldlist'
-import { getBadgeType, getBadgeInfo } from '@/lib/utils/badgeUtils'
+// Removed unused badge imports
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { SharedHeader } from '@/components/shared-header'
 import { DevTimeDisplay } from '@/components/DevTimeDisplay'
+import { LoadingIndicator } from '@/components/LoadingIndicator'
+import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
 
 
 export default function HomeScreen() {
   const router = useRouter()
   const { profile } = useAuth()
-  const { appState, refreshNotebooks } = useApp()
+  const { appState, refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { colors } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay } = useDevTime()
   const [refreshing, setRefreshing] = useState(false)
+  const screenWidth = Dimensions.get('window').width
+  const [currentCarouselPage, setCurrentCarouselPage] = useState(0)
   const [weekData, setWeekData] = useState([
     { day: 'Mon', words: 0, completed: false },
     { day: 'Tue', words: 0, completed: false },
@@ -47,6 +53,11 @@ export default function HomeScreen() {
   useEffect(() => {
     refreshNotebooks()
   }, [])
+
+  // Reset carousel page when notebooks change
+  useEffect(() => {
+    setCurrentCarouselPage(0)
+  }, [appState.notebooks.length])
 
   // Load progress data when profile becomes available
   useEffect(() => {
@@ -84,21 +95,59 @@ export default function HomeScreen() {
     setRefreshing(false)
   }
 
-  const handleCreateNotebook = () => {
-    router.push('/modal/create-notebook')
+  const handleCreateNotebook = async () => {
+    setIsCreateNotebookLoading(true)
+    try {
+      // Add a small delay to show loading state
+      await new Promise(resolve => setTimeout(resolve, 300))
+      router.push('/modal/create-notebook')
+    } finally {
+      setIsCreateNotebookLoading(false)
+    }
   }
 
   const handleNotebookPress = (notebook: NotebookWithStats) => {
+    updateNotebookLastUsed(notebook.id)
     router.push(`/notebook/${notebook.id}`)
   }
 
-  const handleBadgePress = (badge: { id: string; badgeType: 'silver' | 'gold' }) => {
-    // Navigate to bronze notebook review (words will be filtered by round in the review screen)
-    const { bronze } = categorizeNotebooks()
-    if (bronze.length > 0) {
-      router.push(`/notebook/${bronze[0].id}/review`)
+  const handlePracticeButtonPress = async (route: string | null) => {
+    if (!route) return
+    
+    // Extract notebook ID from route and update last used
+    const notebookIdMatch = route.match(/\/notebook\/([^\/\?]+)/)
+    if (notebookIdMatch) {
+      updateNotebookLastUsed(notebookIdMatch[1])
+    }
+    
+    setIsPracticeButtonLoading(true)
+    try {
+      // Add a small delay to show loading state
+      await new Promise(resolve => setTimeout(resolve, 300))
+      router.push(route)
+    } finally {
+      setIsPracticeButtonLoading(false)
     }
   }
+
+  const handleAddWordsPress = async (route: string) => {
+    // Extract notebook ID from route and update last used
+    const notebookIdMatch = route.match(/\/notebook\/([^\/\?]+)/)
+    if (notebookIdMatch) {
+      updateNotebookLastUsed(notebookIdMatch[1])
+    }
+    
+    setIsAddWordsButtonLoading(true)
+    try {
+      // Add a small delay to show loading state
+      await new Promise(resolve => setTimeout(resolve, 300))
+      router.push(route)
+    } finally {
+      setIsAddWordsButtonLoading(false)
+    }
+  }
+
+  // Removed unused handleBadgePress function
 
   const handleResetData = async () => {
     try {
@@ -114,6 +163,11 @@ export default function HomeScreen() {
   const [hasReviewsToday, setHasReviewsToday] = useState(false)
   const [reviewNotebookId, setReviewNotebookId] = useState<string | undefined>()
   const [reviewPageNumber, setReviewPageNumber] = useState<number | undefined>()
+  
+  // Loading states for async operations
+  const [isPracticeButtonLoading, setIsPracticeButtonLoading] = useState(false)
+  const [isAddWordsButtonLoading, setIsAddWordsButtonLoading] = useState(false)
+  const [isCreateNotebookLoading, setIsCreateNotebookLoading] = useState(false)
 
   // Check for reviews only when explicitly needed
   const checkReviewsOnce = async () => {
@@ -235,9 +289,21 @@ export default function HomeScreen() {
     return { type: 'done', text: 'You\'re All Done Today! 🎉', route: null }
   }
 
-  const getPendingReviews = () => {
-    return appState.notebooks.reduce((total, notebook) => total + notebook.pendingReviews, 0)
+  const getNotebookStatus = (notebook: NotebookWithStats) => {
+    // For Bronze notebooks, use the existing logic
+    if (!notebook.notebook_level || notebook.notebook_level === 'bronze') {
+      return getTodayStatus()
+    }
+    
+    // For Silver/Gold notebooks, they are read-only progression trackers
+    return {
+      type: 'info',
+      text: `${notebook.notebook_level.charAt(0).toUpperCase() + notebook.notebook_level.slice(1)} Level`,
+      route: `/notebook/${notebook.id}`
+    }
   }
+
+  // Removed unused getPendingReviews function
 
 
   const getTotalWordsThisWeek = () => {
@@ -308,106 +374,194 @@ export default function HomeScreen() {
     }
   }, [appState.notebooks])
   
-  const bronzeNotebook = categorizeNotebooks().bronze[0]
+  // Removed unused bronzeNotebook variable
 
-  // Component to render integrated bronze notebook with badges
-  const renderIntegratedNotebookCard = (bronzeNotebook: NotebookWithStats) => {
+  // Handle carousel scroll to update page indicators
+  const handleCarouselScroll = (event: any) => {
+    const scrollPosition = event.nativeEvent.contentOffset.x
+    const cardWidth = screenWidth - (SPACING.xl * 2)
+    const currentPage = Math.round(scrollPosition / cardWidth)
+    setCurrentCarouselPage(currentPage)
+  }
+
+  // Component to render notebook carousel with horizontal scrolling
+  const renderNotebookCarousel = () => {
+    if (appState.notebooks.length === 0) {
+      return null // Empty state will be shown below
+    }
+
+    // Sort notebooks by last_used_at (most recent first) - already sorted by service
+    const sortedNotebooks = appState.notebooks
+
     return (
-      <View style={styles.mainNotebookCard}>
-        {/* Bronze Notebook Header */}
-        <View style={styles.notebookHeader}>
-          <View style={styles.notebookLevelIndicator}>
-            <Text style={styles.levelIcon}>🥉</Text>
-            <View>
-              <Text style={[styles.levelTitle, { color: colors.warning }]}>Bronze Notebook</Text>
-              <Text style={styles.levelSubtitle}>Primary learning</Text>
+      <View style={styles.carouselContainer}>
+        <ScrollView
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          decelerationRate="fast"
+          snapToInterval={screenWidth - (SPACING.xl * 2)}
+          snapToAlignment="center"
+          contentContainerStyle={styles.carouselContent}
+          onScroll={handleCarouselScroll}
+          scrollEventThrottle={16}
+        >
+          {sortedNotebooks.map((notebook, index) => (
+            <View key={notebook.id} style={[styles.carouselCard, { width: screenWidth - (SPACING.xl * 2) }]}>
+              {renderNotebookCard(notebook, index)}
+            </View>
+          ))}
+        </ScrollView>
+        
+        {/* Page indicators */}
+        {sortedNotebooks.length > 1 && (
+          <View style={styles.pageIndicators}>
+            {sortedNotebooks.map((_, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.pageIndicator,
+                  { backgroundColor: index === currentCarouselPage ? colors.primary : colors.gray300 }
+                ]}
+              />
+            ))}
+          </View>
+        )}
+      </View>
+    )
+  }
+
+  // Component to render individual notebook card (works for any notebook)
+  const renderNotebookCard = (notebook: NotebookWithStats, index: number) => {
+    // Get badge counts for dynamic styling (only for Bronze notebooks)
+    const silverBadge = notebook.notebook_level === 'bronze' ? notebookBadges.find(badge => badge.badgeType === 'silver') : undefined
+    const goldBadge = notebook.notebook_level === 'bronze' ? notebookBadges.find(badge => badge.badgeType === 'gold') : undefined
+    
+    // Modern unified card styling
+    const getCardStyle = () => {
+      return styles.mainNotebookCard
+    }
+
+    return (
+      <View style={getCardStyle()}>
+        <TouchableOpacity 
+          onPress={() => handleNotebookPress(notebook)}
+          style={styles.notebookCardContent}
+        >
+          {/* Notebook Header with Icon and Flag */}
+          <View style={styles.gameNotebookHeader}>
+            <View style={[
+              styles.notebookIcon,
+              notebook.notebook_level === 'silver' && styles.silverNotebookIcon,
+              notebook.notebook_level === 'gold' && styles.goldNotebookIcon
+            ]}>
+              <Text style={styles.notebookEmoji}>
+                {notebook.notebook_level === 'bronze' ? '📚' : 
+                 notebook.notebook_level === 'silver' ? '🥈' : '🥇'}
+              </Text>
+            </View>
+            <View style={styles.notebookHeaderText}>
+              <View style={styles.notebookTitleWithFlag}>
+                <CountryFlag 
+                  isoCode={getCountryCodeFromLanguage(notebook.language_code)} 
+                  size={20} 
+                  style={styles.notebookFlag}
+                />
+                <Text style={styles.gameNotebookTitle}>{notebook.title}</Text>
+              </View>
+              <Text style={styles.gameNotebookSubtitle}>
+                {index === 0 ? `${getTotalWordsThisWeek()} words this week` : `${notebook.totalWords || 0} total words`}
+              </Text>
             </View>
           </View>
-        </View>
-        
-        <TouchableOpacity 
-          onPress={() => handleNotebookPress(bronzeNotebook)}
-          style={styles.bronzeNotebookContent}
-        >
-          <Text style={styles.notebookTitle}>
-            {bronzeNotebook.title}
-          </Text>
 
-          <Text style={styles.notebookSubtitle}>
-            {getTotalWordsThisWeek()} words added this week
-          </Text>
+          {/* Progress Dots - Game Style (only for Bronze notebooks) */}
+          {notebook.notebook_level === 'bronze' && (
+            <View style={styles.progressDotsContainer}>
+              {/* Bronze Dot */}
+              <View style={styles.progressDot}>
+                <View style={[styles.gameLevelCircle, styles.bronzeGameCircle]}>
+                  <Text style={styles.levelNumber}>{stats.totalWords - (silverBadge?.totalWords || 0) - (goldBadge?.totalWords || 0)}</Text>
+                </View>
+                <Text style={styles.gameLevelLabel}>Bronze</Text>
+              </View>
+
+              {/* Connection Line */}
+              {silverBadge && silverBadge.totalWords > 0 && (
+                <>
+                  <View style={styles.connectionLine} />
+                  <View style={styles.progressDot}>
+                    <View style={[styles.gameLevelCircle, styles.silverGameCircle]}>
+                      <Text style={styles.levelNumber}>{silverBadge.totalWords}</Text>
+                    </View>
+                    <Text style={styles.gameLevelLabel}>Silver</Text>
+                  </View>
+                </>
+              )}
+
+              {/* Gold Connection */}
+              {goldBadge && goldBadge.totalWords > 0 && (
+                <>
+                  <View style={styles.connectionLine} />
+                  <View style={styles.progressDot}>
+                    <View style={[styles.gameLevelCircle, styles.goldGameCircle]}>
+                      <Text style={styles.levelNumber}>{goldBadge.totalWords}</Text>
+                    </View>
+                    <Text style={styles.gameLevelLabel}>Gold</Text>
+                  </View>
+                </>
+              )}
+            </View>
+          )}
 
           <View style={styles.notebookStats}>
             <Text style={styles.totalWords}>
-              {stats.totalWords} total • {stats.masteredWords} mastered
+              {notebook.totalWords || 0} total • {notebook.masteredWords || 0} mastered
             </Text>
           </View>
 
           {(() => {
-            const todayStatus = getTodayStatus()
+            const notebookStatus = getNotebookStatus(notebook)
             return (
               <TouchableOpacity 
                 style={[
                   styles.practiceButton,
-                  todayStatus.type === 'done' && styles.practiceButtonDone
+                  // Color states based on button type
+                  notebookStatus.type === 'review' && styles.practiceButtonReview,
+                  notebookStatus.type === 'add_words' && styles.practiceButtonAddWords,
+                  notebookStatus.type === 'done' && styles.practiceButtonDone,
+                  notebookStatus.type === 'info' && styles.practiceButtonInfo,
                 ]}
-                onPress={() => {
-                  if (todayStatus.route) {
-                    router.push(todayStatus.route)
-                  }
-                }}
-                disabled={!todayStatus.route}
+                onPress={() => handlePracticeButtonPress(notebookStatus.route)}
+                disabled={!notebookStatus.route || isPracticeButtonLoading}
               >
-                <Text style={[
-                  styles.practiceButtonText,
-                  todayStatus.type === 'done' && styles.practiceButtonTextDone
-                ]}>
-                  {todayStatus.text}
-                </Text>
-                {todayStatus.type === 'review' && stats.pendingReviews > 0 && (
-                  <View style={styles.reviewBadge}>
-                    <Text style={styles.reviewBadgeText}>{stats.pendingReviews}</Text>
-                  </View>
+                {isPracticeButtonLoading ? (
+                  <LoadingIndicator size={20} color={colors.cardBackground} />
+                ) : (
+                  <>
+                    <Text style={[
+                      styles.practiceButtonText,
+                      notebookStatus.type === 'done' && styles.practiceButtonTextDone,
+                      notebookStatus.type === 'info' && styles.practiceButtonTextInfo
+                    ]}>
+                      {notebookStatus.text}
+                    </Text>
+                    {notebookStatus.type === 'review' && notebook.pendingReviews > 0 && (
+                      <View style={styles.reviewBadge}>
+                        <Text style={styles.reviewBadgeText}>{notebook.pendingReviews}</Text>
+                      </View>
+                    )}
+                  </>
                 )}
               </TouchableOpacity>
             )
           })()}
         </TouchableOpacity>
 
-        {/* Badge Extensions (Silver/Gold) */}
-        {notebookBadges.length > 0 && (
-          <View style={styles.extensionsContainer}>
-            <View style={styles.extensionsDivider} />
-            <Text style={styles.extensionsTitle}>Achievement Badges</Text>
-            
-            <View style={styles.extensionsList}>
-              {notebookBadges.map(badge => (
-                <TouchableOpacity 
-                  key={badge.id}
-                  style={styles.extensionCard}
-                  onPress={() => handleBadgePress(badge)}
-                >
-                  <View style={styles.extensionHeader}>
-                    <Text style={styles.extensionIcon}>
-                      {badge.badgeType === 'silver' ? '🥈' : '🥇'}
-                    </Text>
-                    <View style={styles.extensionInfo}>
-                      <Text style={styles.extensionName}>
-                        {badge.badgeType === 'silver' ? 'Silver' : 'Gold'} • {bronzeNotebook?.title || 'Bronze Notebook'}
-                      </Text>
-                      <Text style={styles.extensionStats}>
-                        {badge.totalWords} words • {badge.reviewableWords} reviewable
-                      </Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
       </View>
     )
   }
+
 
   // Get real user stats from database
   const [realWordStats, setRealWordStats] = useState({
@@ -484,30 +638,9 @@ export default function HomeScreen() {
         {/* Development Time Simulation */}
         <DevTimeDisplay />
 
-        {/* Integrated Notebook Display or Empty State */}
+        {/* Notebook Carousel or Empty State */}
         {appState.notebooks.length > 0 ? (
-          <View style={styles.notebooksContainer}>
-            {(() => {
-              const { bronze } = categorizeNotebooks()
-              
-              return (
-                <>
-                  {/* Integrated Bronze + Silver/Gold Display */}
-                  {bronze.length > 0 && renderIntegratedNotebookCard(bronze[0])}
-                  
-                  {/* Create First Notebook Button if no Bronze exists */}
-                  {bronze.length === 0 && (
-                    <TouchableOpacity 
-                      style={styles.createNotebookButton}
-                      onPress={handleCreateNotebook}
-                    >
-                      <Text style={styles.createNotebookText}>+ Create Your First Notebook</Text>
-                    </TouchableOpacity>
-                  )}
-                </>
-              )
-            })()}
-          </View>
+          renderNotebookCarousel()
         ) : (
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateIcon}>📚</Text>
@@ -518,8 +651,13 @@ export default function HomeScreen() {
             <TouchableOpacity 
               style={styles.createFirstNotebookButton}
               onPress={handleCreateNotebook}
+              disabled={isCreateNotebookLoading}
             >
-              <Text style={styles.createFirstNotebookText}>Create Your First Notebook</Text>
+              {isCreateNotebookLoading ? (
+                <LoadingIndicator size={16} color={colors.cardBackground} />
+              ) : (
+                <Text style={styles.createFirstNotebookText}>Create Your First Notebook</Text>
+              )}
             </TouchableOpacity>
           </View>
         )}
@@ -583,9 +721,14 @@ export default function HomeScreen() {
             
             <TouchableOpacity 
               style={styles.addWordsButton}
-              onPress={() => router.push(`/notebook/${appState.notebooks[0]?.id}/input`)}
+              onPress={() => handleAddWordsPress(`/notebook/${appState.notebooks[0]?.id}/input`)}
+              disabled={isAddWordsButtonLoading}
             >
-              <Text style={styles.addWordsButtonText}>Add Words</Text>
+              {isAddWordsButtonLoading ? (
+                <LoadingIndicator size={16} color={colors.cardBackground} />
+              ) : (
+                <Text style={styles.addWordsButtonText}>Add Words</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -640,8 +783,13 @@ export default function HomeScreen() {
       <TouchableOpacity 
         style={[styles.fab, { bottom: 60 + Math.max(insets.bottom, 8) + 20 }]} 
         onPress={handleCreateNotebook}
+        disabled={isCreateNotebookLoading}
       >
-        <Text style={styles.fabIcon}>+</Text>
+        {isCreateNotebookLoading ? (
+          <LoadingIndicator size={20} color={colors.cardBackground} />
+        ) : (
+          <Text style={styles.fabIcon}>+</Text>
+        )}
       </TouchableOpacity>
     </View>
   )
@@ -661,10 +809,20 @@ const createStyles = (colors: any) => StyleSheet.create({
   mainNotebookCard: {
     marginHorizontal: SPACING.xl,
     backgroundColor: colors.cardBackground,
-    borderRadius: RADIUS.xl,
+    borderRadius: 24,
     padding: SPACING.xl,
-    marginBottom: SPACING.xl,
-    ...SHADOWS.md,
+    marginBottom: SPACING.lg,
+    // Duolingo-style gamified design with theme-aware borders
+    borderWidth: 3,
+    borderColor: colors.border,
+    borderBottomWidth: 6,
+    borderBottomColor: colors.gray300 || colors.border,
+    ...SHADOWS.lg,
+    shadowColor: colors.shadow || '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
   },
   notebookHeader: {
     alignItems: 'flex-end',
@@ -712,14 +870,40 @@ const createStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#2563EB',
+    borderBottomColor: '#1E40AF',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   practiceButtonText: {
     color: colors.cardBackground,
     fontSize: TYPOGRAPHY.lg,
     fontWeight: TYPOGRAPHY.semibold,
   },
+  // New button color states with 3D borders
+  practiceButtonReview: {
+    backgroundColor: colors.primary, // Orange for review
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+  },
+  practiceButtonAddWords: {
+    backgroundColor: colors.warning, // Yellow for add words  
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+  },
   practiceButtonDone: {
-    backgroundColor: colors.success,
+    backgroundColor: colors.success, // Green for done
+    borderColor: '#059669',
+    borderBottomColor: '#047857',
+    shadowColor: '#059669',
     opacity: 0.8,
   },
   practiceButtonTextDone: {
@@ -857,6 +1041,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderRadius: RADIUS.lg,
     paddingVertical: SPACING.md,
     alignItems: 'center',
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   addWordsButtonText: {
     fontSize: TYPOGRAPHY.base,
@@ -907,8 +1101,17 @@ const createStyles = (colors: any) => StyleSheet.create({
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    ...SHADOWS.lg,
     zIndex: 1000,
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   fabIcon: {
     fontSize: TYPOGRAPHY['2xl'],
@@ -950,6 +1153,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingVertical: SPACING.lg,
     paddingHorizontal: SPACING.xl,
     alignItems: 'center',
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   createFirstNotebookText: {
     fontSize: TYPOGRAPHY.base,
@@ -995,17 +1208,6 @@ const createStyles = (colors: any) => StyleSheet.create({
     gap: SPACING.sm,
     flex: 1,
   },
-  levelIcon: {
-    fontSize: TYPOGRAPHY.xl,
-  },
-  levelTitle: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-  },
-  levelSubtitle: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-  },
   readOnlyBadge: {
     backgroundColor: colors.info + '20',
     borderRadius: RADIUS.sm,
@@ -1037,14 +1239,84 @@ const createStyles = (colors: any) => StyleSheet.create({
     padding: SPACING.lg,
     marginBottom: SPACING.md,
     alignItems: 'center',
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: colors.primary,
+    // Duolingo-style 3D effect (lighter for secondary button)
+    borderWidth: 3,
+    borderBottomWidth: 4,
+    borderColor: colors.primary + '60',
+    borderBottomColor: colors.primary + '80',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
   },
   createNotebookText: {
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.primary,
+  },
+
+  // Notebook carousel styles
+  carouselContainer: {
+    marginBottom: SPACING.xl,
+  },
+  carouselContent: {
+    paddingHorizontal: SPACING.xl,
+  },
+  carouselCard: {
+    paddingHorizontal: SPACING.sm,
+  },
+  pageIndicators: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: SPACING.md,
+    gap: SPACING.sm,
+  },
+  pageIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  
+  // Updated notebook content styles
+  notebookCardContent: {
+    // No additional styling needed - TouchableOpacity wrapper
+  },
+  notebookTitleWithFlag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  notebookFlag: {
+    borderRadius: 3,
+    // Add a subtle shadow for better visibility
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  silverNotebookIcon: {
+    backgroundColor: '#C0C0C0',
+    borderColor: '#A8A8A8',
+    borderBottomColor: '#909090',
+  },
+  goldNotebookIcon: {
+    backgroundColor: '#FFD700',
+    borderColor: '#E8C547',
+    borderBottomColor: '#D1B000',
+  },
+
+  // Additional button styles
+  practiceButtonInfo: {
+    backgroundColor: colors.info,
+    borderColor: '#0284C7',
+    borderBottomColor: '#0369A1',
+    shadowColor: '#0284C7',
+  },
+  practiceButtonTextInfo: {
+    color: colors.cardBackground,
   },
 
   // Integrated notebook styles
@@ -1098,4 +1370,178 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.sm,
     color: colors.textSecondary,
   },
+
+  // Achievement Notebook Cards (Silver/Gold)
+  achievementNotebookCard: {
+    marginHorizontal: SPACING.xl,
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.xl,
+    padding: SPACING.lg,
+    marginBottom: SPACING.lg,
+    ...SHADOWS.md,
+  },
+  
+  // Silver Achievement Card
+  silverNotebookCard: {
+    borderWidth: 2,
+    borderColor: '#C0C0C0',
+    shadowColor: '#C0C0C0',
+    shadowOpacity: 0.2,
+    elevation: 10,
+    backgroundColor: '#F7FAFC',
+  },
+  silverIcon: {
+    textShadowColor: '#C0C0C0',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  silverTitle: {
+    color: '#4A5568',
+  },
+  
+  // Gold Achievement Card
+  goldNotebookCard: {
+    borderWidth: 3,
+    borderColor: '#FFD700',
+    shadowColor: '#FFD700',
+    shadowOpacity: 0.3,
+    elevation: 12,
+    backgroundColor: '#FFFAF0',
+  },
+  goldIcon: {
+    textShadowColor: '#FFD700',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  goldTitle: {
+    color: '#D69E2E',
+  },
+  
+  // Achievement Card Content
+  achievementNotebookHeader: {
+    alignItems: 'flex-end',
+    marginBottom: SPACING.md,
+  },
+  achievementNotebookContent: {
+    gap: SPACING.sm,
+  },
+  achievementNotebookStats: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  achievementNotebookSubtext: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+
+  // Duolingo-Style Game Design
+  gameNotebookHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.lg,
+    gap: SPACING.md,
+  },
+  notebookIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#58CC02',
+    borderWidth: 3,
+    borderColor: '#46A302',
+    borderBottomWidth: 5,
+    borderBottomColor: '#3A8B02',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#46A302',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  notebookEmoji: {
+    fontSize: 24,
+  },
+  notebookHeaderText: {
+    flex: 1,
+  },
+  gameNotebookTitle: {
+    fontSize: TYPOGRAPHY['2xl'],
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.textPrimary,
+    marginBottom: SPACING.xs,
+  },
+  gameNotebookSubtitle: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  progressDotsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.lg,
+    paddingHorizontal: SPACING.sm,
+    justifyContent: 'center',
+  },
+  progressDot: {
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  gameLevelCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 4,
+    borderBottomWidth: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
+  },
+  bronzeGameCircle: {
+    backgroundColor: '#FF9500',
+    borderColor: '#E8850C',
+    borderBottomColor: '#D1750A',
+    shadowColor: '#E8850C',
+  },
+  silverGameCircle: {
+    backgroundColor: '#C0C0C0',
+    borderColor: '#A8A8A8',
+    borderBottomColor: '#909090',
+    shadowColor: '#A8A8A8',
+  },
+  goldGameCircle: {
+    backgroundColor: '#FFD700',
+    borderColor: '#E8C547',
+    borderBottomColor: '#D1B000',
+    shadowColor: '#E8C547',
+  },
+  levelNumber: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: TYPOGRAPHY.bold,
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  gameLevelLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  connectionLine: {
+    width: 24,
+    height: 4,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 2,
+    marginHorizontal: SPACING.xs,
+  },
+
 })

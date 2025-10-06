@@ -4,6 +4,7 @@ export const LIGHT_COLORS = {
   primary: '#F59E0B', // Orange/Gold from the design
   primaryLight: '#FEF3C7',
   primaryDark: '#D97706',
+  primaryDarker: '#B45309',
   
   // Background Colors
   background: '#F8FAFC',
@@ -29,12 +30,20 @@ export const LIGHT_COLORS = {
   // Status Colors
   success: '#10B981',
   successLight: '#D1FAE5',
+  successDark: '#059669',
+  successDarker: '#047857',
   error: '#EF4444',
   errorLight: '#FEE2E2',
+  errorDark: '#DC2626',
+  errorDarker: '#B91C1C',
   warning: '#F59E0B',
   warningLight: '#FEF3C7',
+  warningDark: '#D97706',
+  warningDarker: '#B45309',
   info: '#3B82F6',
   infoLight: '#DBEAFE',
+  infoDark: '#2563EB',
+  infoDarker: '#1E40AF',
   
   // Chart Colors
   chartPrimary: '#F59E0B',
@@ -50,6 +59,7 @@ export const DARK_COLORS = {
   primary: '#F59E0B', // Same orange/gold
   primaryLight: '#92400E', // Darker version for dark mode
   primaryDark: '#FBBF24', // Lighter version for dark mode
+  primaryDarker: '#FDE047', // Even lighter for dark mode
   
   // Background Colors (Based on #2d3137ff)
   background: '#2d3137',
@@ -75,12 +85,20 @@ export const DARK_COLORS = {
   // Status Colors (Slightly adjusted for dark mode)
   success: '#10B981',
   successLight: '#064E3B',
+  successDark: '#34D399',
+  successDarker: '#6EE7B7',
   error: '#EF4444',
   errorLight: '#7F1D1D',
+  errorDark: '#F87171',
+  errorDarker: '#FCA5A5',
   warning: '#F59E0B',
   warningLight: '#92400E',
+  warningDark: '#FBBF24',
+  warningDarker: '#FDE047',
   info: '#3B82F6',
   infoLight: '#1E3A8A',
+  infoDark: '#60A5FA',
+  infoDarker: '#93C5FD',
   
   // Chart Colors
   chartPrimary: '#F59E0B',

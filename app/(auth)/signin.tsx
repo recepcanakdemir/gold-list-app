@@ -14,6 +14,7 @@ import { Link } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
+import { LoadingIndicator } from '@/components/LoadingIndicator'
 
 export default function SignInScreen() {
   const [email, setEmail] = useState('')
@@ -102,9 +103,11 @@ export default function SignInScreen() {
               onPress={handleSignIn}
               disabled={loading}
             >
-              <Text style={styles.primaryButtonText}>
-                {loading ? 'Signing In...' : 'Sign In'}
-              </Text>
+              {loading ? (
+                <LoadingIndicator size={18} color={colors.cardBackground} />
+              ) : (
+                <Text style={styles.primaryButtonText}>Sign In</Text>
+              )}
             </TouchableOpacity>
 
             <Link href="/(auth)/forgot-password" asChild>
@@ -203,7 +206,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: SPACING.xs,
-    ...SHADOWS.sm,
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   disabledButton: {
     backgroundColor: colors.gray400,
@@ -242,7 +254,9 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   socialButton: {
     height: 48,
-    borderWidth: 1,
+    // Duolingo-style 3D effect (lighter for secondary buttons)
+    borderWidth: 2,
+    borderBottomWidth: 3,
     borderColor: colors.border,
     borderRadius: RADIUS.lg,
     justifyContent: 'center',

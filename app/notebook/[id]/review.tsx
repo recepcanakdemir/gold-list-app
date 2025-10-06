@@ -2,7 +2,7 @@ import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { ROUND_COLORS } from '@/lib/types/goldlist'
-import { getBadgeInfo } from '@/lib/utils/badgeUtils'
+import { getBadgeInfo, getBadgeType, getDisplayRound, getBadgeEmoji } from '@/lib/utils/badgeUtils'
 import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -550,6 +550,7 @@ export default function ReviewScreen() {
     forgotten: any[]
   }>({ remembered: [], forgotten: [] })
   const [showWordsList, setShowWordsList] = useState<'remembered' | 'forgotten' | null>(null)
+  const [showExtremelyHardStats, setShowExtremelyHardStats] = useState(false)
   
   // Gesture timing for swipe detection
   const gestureStartTime = useRef(0)
@@ -678,6 +679,22 @@ export default function ReviewScreen() {
         ]}
       >
         <View style={styles.cardContent}>
+          {/* Difficulty Tag for Extremely Hard Words */}
+          {word.difficulty_tag && word.difficulty_tag !== 'NORMAL' && (
+            <View style={styles.difficultyTagContainer}>
+              <Text style={[
+                styles.difficultyTagText,
+                {
+                  color: word.difficulty_tag === 'EXTREMELY_HARD' ? '#DC2626' :
+                         word.difficulty_tag === 'MASTER_LEVEL' ? '#EA580C' :
+                         '#D97706' // LEGENDARY
+                }
+              ]}>
+                {word.difficulty_tag.replace('_', ' ')}
+              </Text>
+            </View>
+          )}
+          
           {/* Badge indicator */}
           <View style={[styles.badgeIndicator, {
             backgroundColor: badgeInfo.badgeColor
@@ -706,6 +723,13 @@ export default function ReviewScreen() {
               }
             ]}>
               <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
+              {word.word_type && word.word_type !== 'unknown' && (
+                <Text style={styles.wordTypeSubtle}>
+                  ({word.word_type === 'adjective' ? 'adj' :
+                    word.word_type === 'adverb' ? 'adv' :
+                    word.word_type})
+                </Text>
+              )}
               {word.notes && (
                 <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
               )}
@@ -737,6 +761,13 @@ export default function ReviewScreen() {
             ]}>
               <Text style={[styles.cardMeaning, { color: '#000000' }]}>{word.meaning}</Text>
               <Text style={[styles.cardOriginal, { color: '#000000' }]}>{word.word}</Text>
+              {word.word_type && word.word_type !== 'unknown' && (
+                <Text style={styles.wordTypeSubtle}>
+                  ({word.word_type === 'adjective' ? 'adj' :
+                    word.word_type === 'adverb' ? 'adv' :
+                    word.word_type})
+                </Text>
+              )}
               {word.notes && (
                 <Text style={[styles.cardNotes, { color: '#000000' }]}>{word.notes}</Text>
               )}
@@ -893,31 +924,73 @@ export default function ReviewScreen() {
     const finalStats = visualStats.current
     const accuracy = finalStats.total > 0 ? Math.round((finalStats.remembered / finalStats.total) * 100) : 0
 
-    // Calculate round distribution
-    console.log(`🎯 Calculating round stats from reviewResults:`)
+    // Calculate multi-level round distribution using database round ranges
+    console.log(`🎯 Calculating multi-level round stats from reviewResults:`)
     console.log(`🎯 Total remembered: ${reviewResults.remembered.length}, Total forgotten: ${reviewResults.forgotten.length}`)
-    console.log(`🎯 Remembered words:`, reviewResults.remembered.map(w => `${w.word} (R${w.current_round || 'undefined'})`))
-    console.log(`🎯 Forgotten words:`, reviewResults.forgotten.map(w => `${w.word} (R${w.current_round || 'undefined'})`))
+    console.log(`🎯 Remembered words:`, reviewResults.remembered.map(w => `${w.word} (DB Round ${w.current_round || 'undefined'}, Badge: ${getBadgeType(w.current_round || 1)})`))
+    console.log(`🎯 Forgotten words:`, reviewResults.forgotten.map(w => `${w.word} (DB Round ${w.current_round || 'undefined'}, Badge: ${getBadgeType(w.current_round || 1)})`))
     console.log(`🎯 Sample word object:`, reviewResults.remembered[0] || reviewResults.forgotten[0])
     
-    const roundStats = [1, 2, 3, 4].map(round => {
+    // Group by database round ranges and organize by level (Bronze: 1-4, Silver: 5-8, Gold: 9-12)
+    const roundRanges = [
+      { level: 'bronze', dbRounds: [1, 2, 3, 4] },
+      { level: 'silver', dbRounds: [5, 6, 7, 8] },
+      { level: 'gold', dbRounds: [9, 10, 11, 12] }
+    ]
+    
+    const roundStatsByLevel = roundRanges.map(({ level, dbRounds }) => {
       const allWords = reviewResults.remembered.concat(reviewResults.forgotten)
-      console.log(`🎯 Round ${round} - Checking ${allWords.length} total words`)
-      const roundWords = allWords.filter(w => w.current_round === round)
-      console.log(`🎯 Round ${round} - Found ${roundWords.length} words: ${roundWords.map(w => w.word).join(', ')}`)
-      const remembered = reviewResults.remembered.filter(w => w.current_round === round).length
-      const total = roundWords.length
-      const result = {
-        round,
-        total,
-        remembered,
-        forgotten: total - remembered,
-        accuracy: total > 0 ? Math.round((remembered / total) * 100) : 0,
-        colors: ROUND_COLORS[round as keyof typeof ROUND_COLORS]
+      const levelWords = allWords.filter(w => dbRounds.includes(w.current_round || 0))
+      
+      if (levelWords.length === 0) return { level, rounds: [] }
+      
+      console.log(`🎯 ${level.toUpperCase()} Level (DB Rounds ${dbRounds.join(',')}) - Found ${levelWords.length} words`)
+      
+      const rounds = dbRounds.map(dbRound => {
+        const roundWords = levelWords.filter(w => w.current_round === dbRound)
+        const remembered = reviewResults.remembered.filter(w => w.current_round === dbRound).length
+        const total = roundWords.length
+        
+        if (total === 0) return null
+        
+        const displayRound = getDisplayRound(dbRound)
+        const result = {
+          round: displayRound,
+          level,
+          dbRound,
+          total,
+          remembered,
+          forgotten: total - remembered,
+          accuracy: total > 0 ? Math.round((remembered / total) * 100) : 0,
+          colors: ROUND_COLORS[dbRound as keyof typeof ROUND_COLORS],
+          label: `${level.charAt(0).toUpperCase()}R${displayRound}`
+        }
+        console.log(`🎯 ${level.toUpperCase()} DB Round ${dbRound} (Display Round ${displayRound}) stats:`, result)
+        return result
+      }).filter((item): item is NonNullable<typeof item> => item !== null)
+      
+      return { level, rounds }
+    }).filter(levelGroup => levelGroup.rounds.length > 0)
+    
+    // Flatten for backward compatibility with existing sizing logic
+    const roundStats = roundStatsByLevel.flatMap(levelGroup => levelGroup.rounds)
+    
+    // Smart sizing based on total number of circles (1 overall + round stats)
+    const totalCircles = 1 + roundStats.length
+    console.log(`🎯 Total circles to display: ${totalCircles} (1 overall + ${roundStats.length} rounds)`)
+    
+    // Determine circle size and layout based on total count
+    const getCircleConfig = (totalCount: number) => {
+      if (totalCount <= 5) {
+        return { size: 100, overallSize: 160, gap: 20, rows: 1 }
+      } else if (totalCount <= 9) {
+        return { size: 80, overallSize: 140, gap: 15, rows: 2 }
+      } else {
+        return { size: 65, overallSize: 120, gap: 12, rows: 3 }
       }
-      console.log(`🎯 Round ${round} stats:`, result)
-      return result
-    }).filter(r => r.total > 0)
+    }
+    
+    const circleConfig = getCircleConfig(totalCircles)
     
     console.log(`🎯 Final roundStats after filtering:`, roundStats)
 
@@ -954,98 +1027,128 @@ export default function ReviewScreen() {
                 }
               ]}
             >
-              <View style={styles.overallCircleContainerLarge}>
-                <Svg width={160} height={160} style={styles.svgCircle}>
+              <View style={[styles.overallCircleContainerLarge, { width: Math.min(circleConfig.overallSize * 0.9, 110), height: Math.min(circleConfig.overallSize * 0.9, 110) }]}>
+                <Svg width={Math.min(circleConfig.overallSize * 0.9, 110)} height={Math.min(circleConfig.overallSize * 0.9, 110)} style={styles.svgCircle}>
                   {/* Background Circle */}
                   <Circle
-                    cx="80"
-                    cy="80"
-                    r="70"
+                    cx={Math.min(circleConfig.overallSize * 0.9, 110) / 2}
+                    cy={Math.min(circleConfig.overallSize * 0.9, 110) / 2}
+                    r={Math.min(circleConfig.overallSize * 0.9, 110) / 2 - 14}
                     stroke={colors.gray200 || '#E5E7EB'}
-                    strokeWidth="16"
+                    strokeWidth="14"
                     fill="transparent"
                   />
                   {/* Progress Circle */}
                   <Circle
-                    cx="80"
-                    cy="80"
-                    r="70"
+                    cx={Math.min(circleConfig.overallSize * 0.9, 110) / 2}
+                    cy={Math.min(circleConfig.overallSize * 0.9, 110) / 2}
+                    r={Math.min(circleConfig.overallSize * 0.9, 110) / 2 - 14}
                     stroke={colors.primary}
-                    strokeWidth="16"
+                    strokeWidth="14"
                     fill="transparent"
-                    strokeDasharray={`${2 * Math.PI * 70}`}
-                    strokeDashoffset={`${2 * Math.PI * 70 * (1 - accuracy / 100)}`}
+                    strokeDasharray={`${2 * Math.PI * (Math.min(circleConfig.overallSize * 0.9, 110) / 2 - 14)}`}
+                    strokeDashoffset={`${2 * Math.PI * (Math.min(circleConfig.overallSize * 0.9, 110) / 2 - 14) * (1 - accuracy / 100)}`}
                     strokeLinecap="round"
-                    transform="rotate(-90 80 80)"
+                    transform={`rotate(-90 ${Math.min(circleConfig.overallSize * 0.9, 110) / 2} ${Math.min(circleConfig.overallSize * 0.9, 110) / 2})`}
                   />
                 </Svg>
                 
                 <View style={styles.overallProgressContentLarge}>
-                  <Text style={styles.overallProgressNumberLarge}>{accuracy}%</Text>
-                  <Text style={styles.overallProgressLabelLarge}>Overall Score</Text>
+                  <Text style={[styles.overallProgressNumberLarge, { fontSize: 20 }]}>{accuracy}%</Text>
                 </View>
               </View>
+              
+              {/* Overall Score Label Outside Circle */}
+              <Text style={[styles.overallProgressLabelLarge, { marginTop: 8, textAlign: 'center' }]}>Overall Score</Text>
             </Animated.View>
 
-            {/* Round Progress Circles */}
-            <View style={styles.roundProgressContainer}>
-              {(() => {
-                console.log(`🎯 Rendering round progress circles - roundStats.length: ${roundStats.length}`)
-                return roundStats.map((roundStat, index) => {
-                  console.log(`🎯 Rendering round ${roundStat.round} with ${roundStat.total} words`)
-                  return (
-                <Animated.View 
-                  key={roundStat.round}
-                  style={[
-                    styles.roundProgressWrapper,
-                    {
-                      opacity: dashboardFadeAnim,
-                      transform: [{ 
-                        scale: dashboardFadeAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0.6, 1]
-                        })
-                      }]
-                    }
-                  ]}
-                >
-                  <View style={styles.roundCircleContainerLarge}>
-                    <Svg width={100} height={100} style={styles.svgCircle}>
-                      {/* Background Circle */}
-                      <Circle
-                        cx="50"
-                        cy="50"
-                        r="42"
-                        stroke={colors.gray200 || '#E5E7EB'}
-                        strokeWidth="12"
-                        fill="transparent"
-                      />
-                      {/* Progress Circle */}
-                      <Circle
-                        cx="50"
-                        cy="50"
-                        r="42"
-                        stroke={roundStat.colors.primary}
-                        strokeWidth="12"
-                        fill="transparent"
-                        strokeDasharray={`${2 * Math.PI * 42}`}
-                        strokeDashoffset={`${2 * Math.PI * 42 * (1 - roundStat.accuracy / 100)}`}
-                        strokeLinecap="round"
-                        transform="rotate(-90 50 50)"
-                      />
-                    </Svg>
+            {/* Structured Multi-Level Round Progress Circles */}
+            <View style={styles.structuredRoundProgressContainer}>
+              {roundStatsByLevel.map((levelGroup, levelIndex) => {
+                console.log(`🎯 Rendering ${levelGroup.level} level with ${levelGroup.rounds.length} rounds`)
+                
+                // Get badge emoji for this level using a sample database round
+                const sampleDbRound = levelGroup.level === 'bronze' ? 1 : levelGroup.level === 'silver' ? 5 : 9
+                const levelBadge = getBadgeEmoji(sampleDbRound)
+                const levelTitle = `${levelGroup.level.charAt(0).toUpperCase() + levelGroup.level.slice(1)} Notebook Results`
+                
+                return (
+                  <View key={levelGroup.level} style={styles.levelSection}>
+                    {/* Level Header with Badge and Title */}
+                    <View style={styles.levelHeader}>
+                      <Text style={styles.levelBadge}>{levelBadge}</Text>
+                      <Text style={styles.levelTitle}>{levelTitle}</Text>
+                    </View>
                     
-                    <View style={styles.roundProgressContentLarge}>
-                      <Text style={[styles.roundProgressNumberLarge, { color: roundStat.colors.primary }]}>
-                        {roundStat.accuracy}%
-                      </Text>
-                      <Text style={styles.roundProgressLabelLarge}>R{roundStat.round}</Text>
+                    {/* Round Circles Row */}
+                    <View style={styles.levelRow}>
+                    {levelGroup.rounds.map((roundStat) => {
+                      console.log(`🎯 Rendering ${roundStat.level} Round ${roundStat.round} with ${roundStat.total} words`)
+                      const circleSize = Math.min(circleConfig.size * 0.85, 70) // Slightly larger for better readability
+                      const circleRadius = circleSize / 2 - 7
+                      const strokeWidth = 7
+                      
+                      return (
+                        <Animated.View 
+                          key={`${roundStat.level}-${roundStat.round}`}
+                          style={[
+                            styles.roundProgressWrapper,
+                            {
+                              opacity: dashboardFadeAnim,
+                              transform: [{ 
+                                scale: dashboardFadeAnim.interpolate({
+                                  inputRange: [0, 1],
+                                  outputRange: [0.6, 1]
+                                })
+                              }]
+                            }
+                          ]}
+                        >
+                          <View style={[styles.roundCircleContainerLarge, { width: circleSize, height: circleSize }]}>
+                            <Svg width={circleSize} height={circleSize} style={styles.svgCircle}>
+                              {/* Background Circle */}
+                              <Circle
+                                cx={circleSize / 2}
+                                cy={circleSize / 2}
+                                r={circleRadius}
+                                stroke={colors.gray200 || '#E5E7EB'}
+                                strokeWidth={strokeWidth}
+                                fill="transparent"
+                              />
+                              {/* Progress Circle */}
+                              <Circle
+                                cx={circleSize / 2}
+                                cy={circleSize / 2}
+                                r={circleRadius}
+                                stroke={roundStat.colors.primary}
+                                strokeWidth={strokeWidth}
+                                fill="transparent"
+                                strokeDasharray={`${2 * Math.PI * circleRadius}`}
+                                strokeDashoffset={`${2 * Math.PI * circleRadius * (1 - roundStat.accuracy / 100)}`}
+                                strokeLinecap="round"
+                                transform={`rotate(-90 ${circleSize / 2} ${circleSize / 2})`}
+                              />
+                            </Svg>
+                            
+                            <View style={styles.roundProgressContentLarge}>
+                              <Text style={[
+                                styles.roundProgressNumberLarge, 
+                                { 
+                                  color: roundStat.colors.primary,
+                                  fontSize: 14
+                                }
+                              ]}>
+                                {roundStat.accuracy}%
+                              </Text>
+                            </View>
+                          </View>
+                        </Animated.View>
+                      )
+                    })}
                     </View>
                   </View>
-                </Animated.View>
-                  )
-                })
-              })()}
+                )
+              })}
             </View>
           </Animated.View>
 
@@ -1068,6 +1171,71 @@ export default function ReviewScreen() {
               <Text style={styles.quickStatLabel}>Time</Text>
             </View>
           </Animated.View>
+
+          {/* Extremely Hard Words Statistics */}
+          {(() => {
+            const allWords = reviewResults.remembered.concat(reviewResults.forgotten)
+            const extremelyHardWords = allWords.filter(w => w.difficulty_tag && w.difficulty_tag !== 'NORMAL')
+            
+            if (extremelyHardWords.length === 0) return null
+            
+            const statsByDifficulty = {
+              EXTREMELY_HARD: extremelyHardWords.filter(w => w.difficulty_tag === 'EXTREMELY_HARD').length,
+              MASTER_LEVEL: extremelyHardWords.filter(w => w.difficulty_tag === 'MASTER_LEVEL').length,
+              LEGENDARY: extremelyHardWords.filter(w => w.difficulty_tag === 'LEGENDARY').length
+            }
+            
+            return (
+              <Animated.View style={styles.extremelyHardSection}>
+                {/* Indicator - Always visible if there are extremely hard words */}
+                <TouchableOpacity 
+                  style={styles.extremelyHardIndicator}
+                  onPress={() => setShowExtremelyHardStats(!showExtremelyHardStats)}
+                >
+                  <Text style={styles.extremelyHardIndicatorText}>
+                    📍 {extremelyHardWords.length} Extremely Hard Word{extremelyHardWords.length !== 1 ? 's' : ''}
+                  </Text>
+                  <Text style={styles.expandIndicator}>
+                    {showExtremelyHardStats ? '▼' : '▶'}
+                  </Text>
+                </TouchableOpacity>
+                
+                {/* Expandable Detail Section */}
+                {showExtremelyHardStats && (
+                  <Animated.View style={styles.extremelyHardDetails}>
+                    <Text style={styles.extremelyHardDetailsTitle}>Difficulty Breakdown</Text>
+                    
+                    {statsByDifficulty.EXTREMELY_HARD > 0 && (
+                      <View style={styles.difficultyStatRow}>
+                        <Text style={styles.difficultyStatEmoji}>🔴</Text>
+                        <Text style={styles.difficultyStatText}>
+                          Extremely Hard: {statsByDifficulty.EXTREMELY_HARD} word{statsByDifficulty.EXTREMELY_HARD !== 1 ? 's' : ''} (Cycle 1)
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {statsByDifficulty.MASTER_LEVEL > 0 && (
+                      <View style={styles.difficultyStatRow}>
+                        <Text style={styles.difficultyStatEmoji}>🟠</Text>
+                        <Text style={styles.difficultyStatText}>
+                          Master Level: {statsByDifficulty.MASTER_LEVEL} word{statsByDifficulty.MASTER_LEVEL !== 1 ? 's' : ''} (Cycle 2)
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {statsByDifficulty.LEGENDARY > 0 && (
+                      <View style={styles.difficultyStatRow}>
+                        <Text style={styles.difficultyStatEmoji}>🟡</Text>
+                        <Text style={styles.difficultyStatText}>
+                          Legendary: {statsByDifficulty.LEGENDARY} word{statsByDifficulty.LEGENDARY !== 1 ? 's' : ''} (Cycle 3+)
+                        </Text>
+                      </View>
+                    )}
+                  </Animated.View>
+                )}
+              </Animated.View>
+            )
+          })()}
 
           {/* Action Buttons */}
           <Animated.View 
@@ -1119,8 +1287,26 @@ export default function ReviewScreen() {
   const nextRoundColors = wordColorsMap.get(nextWord?.id) || ROUND_COLORS[1]
   const progress = words.length > 0 ? (displayIndex + 1) / words.length : 0
 
+  // Get background color based on current word's difficulty
+  const getBackgroundColor = () => {
+    if (!currentWord?.difficulty_tag || currentWord.difficulty_tag === 'NORMAL') {
+      return colors.background
+    }
+    
+    switch (currentWord.difficulty_tag) {
+      case 'EXTREMELY_HARD':
+        return '#7F1D1D' // Dark red
+      case 'MASTER_LEVEL':
+        return '#7C2D12' // Dark red-orange
+      case 'LEGENDARY':
+        return '#451A03' // Very dark brown/black
+      default:
+        return colors.background
+    }
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: getBackgroundColor() }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => {
@@ -1482,6 +1668,15 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontStyle: 'italic',
     marginBottom: 20,
     opacity: 0.8,
+  },
+  wordTypeSubtle: {
+    fontSize: 14,
+    fontStyle: 'italic',
+    color: '#000000',
+    opacity: 0.6,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 8,
   },
   tapHint: {
     fontSize: 14,
@@ -1928,6 +2123,37 @@ const createStyles = (colors: any) => StyleSheet.create({
     gap: 20,
     flexWrap: 'wrap',
   },
+  
+  // Structured 3-Row Grid Layout for Bronze/Silver/Gold
+  structuredRoundProgressContainer: {
+    alignItems: 'center',
+    gap: 14,
+  },
+  levelSection: {
+    alignItems: 'center',
+    width: '100%',
+  },
+  levelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    gap: 6,
+  },
+  levelBadge: {
+    fontSize: 18,
+  },
+  levelTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  levelRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 14,
+    flexWrap: 'nowrap',
+  },
   roundProgressWrapper: {
     alignItems: 'center',
   },
@@ -2043,5 +2269,82 @@ const createStyles = (colors: any) => StyleSheet.create({
   badgeText: {
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  
+  // Difficulty Tag Styles
+  difficultyTagContainer: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    right: 16,
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  difficultyTagText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  
+  // Extremely Hard Statistics Styles
+  extremelyHardSection: {
+    marginVertical: 16,
+    paddingHorizontal: 20,
+  },
+  extremelyHardIndicator: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#DC2626',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  extremelyHardIndicatorText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  expandIndicator: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontWeight: 'bold',
+  },
+  extremelyHardDetails: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
+    marginTop: 8,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  extremelyHardDetailsTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  difficultyStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    gap: 8,
+  },
+  difficultyStatEmoji: {
+    fontSize: 16,
+  },
+  difficultyStatText: {
+    fontSize: 13,
+    color: colors.textPrimary,
+    flex: 1,
   },
 })

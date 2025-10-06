@@ -9,6 +9,8 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Link, useRouter } from 'expo-router'
+import { useTheme } from '@/lib/contexts/ThemeContext'
+import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { supabase } from '@/lib/supabase/client'
 
 export default function ForgotPasswordScreen() {
@@ -16,6 +18,8 @@ export default function ForgotPasswordScreen() {
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
   const router = useRouter()
+  const { colors } = useTheme()
+  const styles = createStyles(colors)
 
   const handleResetPassword = async () => {
     if (!email) {
@@ -113,67 +117,78 @@ export default function ForgotPasswordScreen() {
   )
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.background,
   },
   content: {
     flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 60,
-    paddingBottom: 32,
+    paddingHorizontal: SPACING.xl,
+    paddingTop: SPACING['4xl'],
+    paddingBottom: SPACING['2xl'],
   },
   header: {
-    marginBottom: 40,
+    marginBottom: SPACING['3xl'],
   },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-    marginBottom: 8,
+    fontSize: TYPOGRAPHY['2xl'],
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.textPrimary,
+    marginBottom: SPACING.xs,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textSecondary,
     lineHeight: 24,
   },
   form: {
-    marginBottom: 32,
+    marginBottom: SPACING['2xl'],
   },
   inputContainer: {
-    marginBottom: 20,
+    marginBottom: SPACING.lg,
   },
   label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 8,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textPrimary,
+    marginBottom: SPACING.xs,
   },
   input: {
     height: 48,
     borderWidth: 1,
-    borderColor: '#e1e1e1',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
+    borderColor: colors.border,
+    borderRadius: RADIUS.lg,
+    paddingHorizontal: SPACING.lg,
+    fontSize: TYPOGRAPHY.base,
+    backgroundColor: colors.cardBackground,
+    color: colors.textPrimary,
   },
   primaryButton: {
-    backgroundColor: '#2563eb',
+    backgroundColor: colors.primary,
     height: 48,
-    borderRadius: 12,
+    borderRadius: RADIUS.lg,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: SPACING.xs,
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   disabledButton: {
-    backgroundColor: '#9ca3af',
+    backgroundColor: colors.gray400,
   },
   primaryButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+    color: colors.background,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
   },
   footer: {
     flexDirection: 'row',
@@ -181,13 +196,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   footerText: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
   },
   footerLink: {
-    fontSize: 14,
-    color: '#2563eb',
-    fontWeight: '600',
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.primary,
+    fontWeight: TYPOGRAPHY.semibold,
   },
   successContainer: {
     alignItems: 'center',
@@ -195,26 +210,26 @@ const styles = StyleSheet.create({
   },
   successIcon: {
     fontSize: 64,
-    marginBottom: 24,
+    marginBottom: SPACING.xl,
   },
   successTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-    marginBottom: 16,
+    fontSize: TYPOGRAPHY.xl,
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.textPrimary,
+    marginBottom: SPACING.lg,
     textAlign: 'center',
   },
   successText: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textSecondary,
     textAlign: 'center',
-    marginBottom: 12,
+    marginBottom: SPACING.md,
   },
   successSubtext: {
-    fontSize: 14,
-    color: '#999',
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textLight,
     textAlign: 'center',
     lineHeight: 20,
-    marginBottom: 40,
+    marginBottom: SPACING['3xl'],
   },
 })

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
   Modal,
+  Animated,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router'
@@ -19,11 +20,13 @@ import { NotebookWithStats } from '@/lib/types/goldlist'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
+import { LoadingIndicator } from '@/components/LoadingIndicator'
 
 interface WordEntry {
   word: string
   meaning: string
   notes: string
+  word_type?: string
 }
 
 interface SavedWord {
@@ -31,6 +34,7 @@ interface SavedWord {
   word: string
   meaning: string
   notes: string
+  word_type?: string
 }
 
 export default function WordInputScreen() {
@@ -46,7 +50,7 @@ export default function WordInputScreen() {
   const [loading, setLoading] = useState(false)
   
   // New state for List Mode redesign
-  const [currentWordForm, setCurrentWordForm] = useState<WordEntry>({ word: '', meaning: '', notes: '' })
+  const [currentWordForm, setCurrentWordForm] = useState<WordEntry>({ word: '', meaning: '', notes: '', word_type: 'unknown' })
   const [savedWords, setSavedWords] = useState<SavedWord[]>([])
   const [editingWordId, setEditingWordId] = useState<string | null>(null)
   const [formLoading, setFormLoading] = useState(false)
@@ -54,11 +58,49 @@ export default function WordInputScreen() {
   // New state for overlay modal
   const [showAddWordModal, setShowAddWordModal] = useState(false)
   
+  // Animated progress value for smooth transitions
+  const [animatedProgress] = useState(new Animated.Value(0))
+
+  // Validation helpers
+  const isWordValid = useCallback((word: string) => {
+    return (word || '').trim().length > 0
+  }, [])
+
+  const isMeaningValid = useCallback((meaning: string) => {
+    return (meaning || '').trim().length > 0
+  }, [])
+
+  const isWordEntryComplete = useCallback((entry: WordEntry) => {
+    return isWordValid(entry.word) && isMeaningValid(entry.meaning)
+  }, [isWordValid, isMeaningValid])
+
+  // Focus mode validation
+  const isCurrentWordComplete = useMemo(() => {
+    if (mode === 'focus' && words[currentIndex]) {
+      return isWordEntryComplete(words[currentIndex])
+    }
+    return false
+  }, [mode, words, currentIndex, isWordEntryComplete])
+
+  // List mode validation
+  const isCurrentFormComplete = useMemo(() => {
+    return isWordEntryComplete(currentWordForm)
+  }, [currentWordForm, isWordEntryComplete])
+  
   const styles = createStyles(colors)
 
   useEffect(() => {
     loadNotebook()
   }, [id])
+
+  // Animate progress changes smoothly
+  useEffect(() => {
+    Animated.timing(animatedProgress, {
+      toValue: progress * 100,
+      duration: 300,
+      useNativeDriver: false,
+    }).start()
+  }, [progress, animatedProgress])
 
   useEffect(() => {
     if (notebook) {
@@ -181,6 +223,7 @@ export default function WordInputScreen() {
       word: '',
       meaning: '',
       notes: '',
+      word_type: 'unknown',
     }))
     setWords(initialWords)
   }
@@ -194,7 +237,7 @@ export default function WordInputScreen() {
   const addNewWord = () => {
     const maxWords = notebook?.words_per_day || 20
     if (words.length < maxWords) {
-      setWords([...words, { word: '', meaning: '', notes: '' }])
+      setWords([...words, { word: '', meaning: '', notes: '', word_type: 'unknown' }])
     } else {
       Alert.alert('Word Limit Reached', `You can only add ${maxWords} words per day according to your notebook settings.`)
     }
@@ -234,27 +277,35 @@ export default function WordInputScreen() {
     let wordsToSave: any[] = []
     
     if (mode === 'focus') {
-      const filledWords = words.filter(w => w.word.trim() && w.meaning.trim())
+      // Enhanced validation with null safety
+      const filledWords = words.filter(w => 
+        (w.word || '').trim() && (w.meaning || '').trim()
+      )
       wordsToSave = filledWords.map((word, index) => ({
-        word: word.word.trim(),
-        translation: word.meaning.trim(),
-        meaning: word.meaning.trim(),
-        notes: word.notes.trim() || undefined,
+        word: (word.word || '').trim(),
+        translation: (word.meaning || '').trim(),
+        meaning: (word.meaning || '').trim(),
+        notes: (word.notes || '').trim() || undefined,
+        word_type: word.word_type || 'unknown',
         position_in_page: index + 1,
       }))
     } else {
-      // List mode - use savedWords
-      wordsToSave = savedWords.map((word, index) => ({
-        word: word.word.trim(),
-        translation: word.meaning.trim(),
-        meaning: word.meaning.trim(),
-        notes: word.notes.trim() || undefined,
+      // List mode - use savedWords with validation
+      const validWords = savedWords.filter(w => 
+        (w.word || '').trim() && (w.meaning || '').trim()
+      )
+      wordsToSave = validWords.map((word, index) => ({
+        word: (word.word || '').trim(),
+        translation: (word.meaning || '').trim(),
+        meaning: (word.meaning || '').trim(),
+        notes: (word.notes || '').trim() || undefined,
+        word_type: word.word_type || 'unknown',
         position_in_page: index + 1,
       }))
     }
     
     if (wordsToSave.length === 0) {
-      Alert.alert('No Words', 'Please add at least one word before saving.')
+      Alert.alert('No Complete Words', 'Please add at least one word with both word and meaning filled before saving.')
       return
     }
 
@@ -300,7 +351,7 @@ export default function WordInputScreen() {
                 setCurrentIndex(0)
               } else {
                 setSavedWords([])
-                setCurrentWordForm({ word: '', meaning: '', notes: '' })
+                setCurrentWordForm({ word: '', meaning: '', notes: '', word_type: 'unknown' })
                 setEditingWordId(null)
               }
             },
@@ -334,16 +385,32 @@ export default function WordInputScreen() {
     }
   }
 
-  const getProgress = () => {
+  // Enhanced progress calculation with real-time updates
+  const progress = useMemo(() => {
     if (mode === 'focus') {
-      const filledWords = words.filter(w => w.word.trim() && w.meaning.trim()).length
+      // In focus mode, progress based on current position + filled words
+      const filledWords = words.filter(w => 
+        (w.word || '').trim() && (w.meaning || '').trim()
+      ).length
       const target = notebook?.words_per_day || 20
-      return Math.min(filledWords / target, 1)
+      // Use the higher of filled words or current position for visual progress
+      const progressValue = Math.min(Math.max(filledWords, currentIndex + 1) / target, 1)
+      return progressValue
     } else {
       const target = notebook?.words_per_day || 20
       return Math.min(savedWords.length / target, 1)
     }
-  }
+  }, [mode, words, savedWords, notebook?.words_per_day, currentIndex])
+
+  const filledWordsCount = useMemo(() => {
+    const maxWords = notebook?.words_per_day || 20
+    if (mode === 'focus') {
+      // In focus mode, show current position (where user is working)
+      return Math.min(currentIndex + 1, maxWords)
+    } else {
+      return Math.min(savedWords.length, maxWords)
+    }
+  }, [mode, currentIndex, savedWords, notebook?.words_per_day])
 
   // New functions for List Mode form-based approach
   const handleSaveCurrentWord = () => {
@@ -376,7 +443,7 @@ export default function WordInputScreen() {
     }
 
     // Clear form
-    setCurrentWordForm({ word: '', meaning: '', notes: '' })
+    setCurrentWordForm({ word: '', meaning: '', notes: '', word_type: 'unknown' })
   }
 
   const handleEditWord = (wordId: string) => {
@@ -385,7 +452,8 @@ export default function WordInputScreen() {
       setCurrentWordForm({
         word: wordToEdit.word,
         meaning: wordToEdit.meaning,
-        notes: wordToEdit.notes
+        notes: wordToEdit.notes,
+        word_type: wordToEdit.word_type || 'unknown'
       })
       setEditingWordId(wordId)
       setShowAddWordModal(true)
@@ -393,7 +461,7 @@ export default function WordInputScreen() {
   }
 
   const handleCancelEdit = () => {
-    setCurrentWordForm({ word: '', meaning: '', notes: '' })
+    setCurrentWordForm({ word: '', meaning: '', notes: '', word_type: 'unknown' })
     setEditingWordId(null)
     setShowAddWordModal(false)
   }
@@ -403,7 +471,7 @@ export default function WordInputScreen() {
     // Always close modal after saving
     setShowAddWordModal(false)
     // Clear form for next use
-    setCurrentWordForm({ word: '', meaning: '', notes: '' })
+    setCurrentWordForm({ word: '', meaning: '', notes: '', word_type: 'unknown' })
     setEditingWordId(null)
   }
 
@@ -485,9 +553,11 @@ export default function WordInputScreen() {
               onPress={handleSave}
               disabled={loading}
             >
-              <Text style={styles.headerSaveButtonText}>
-                {loading ? 'Saving...' : 'Save'}
-              </Text>
+              {loading ? (
+                <LoadingIndicator size={16} color={colors.cardBackground} />
+              ) : (
+                <Text style={styles.headerSaveButtonText}>Save</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -496,13 +566,17 @@ export default function WordInputScreen() {
         <View style={styles.progressSection}>
           <View style={styles.progressContainer}>
             <View style={styles.progressBar}>
-              <View style={[styles.progressFill, { width: `${getProgress() * 100}%` }]} />
+              <View 
+                style={[
+                  styles.progressFill, 
+                  { 
+                    width: `${progress * 100}%`
+                  }
+                ]} 
+              />
             </View>
             <Text style={styles.progressText}>
-              {mode === 'focus' 
-                ? words.filter(w => w.word.trim() && w.meaning.trim()).length 
-                : savedWords.length
-              } / {notebook.words_per_day}
+              {filledWordsCount} / {notebook.words_per_day}
             </Text>
           </View>
         </View>
@@ -515,8 +589,13 @@ export default function WordInputScreen() {
             onUpdateWord={updateWord}
             onNext={handleNext}
             onPrevious={handlePrevious}
+            onSave={handleSave}
             maxWords={notebook?.words_per_day || 20}
             styles={styles}
+            isCurrentWordComplete={isCurrentWordComplete}
+            isWordValid={isWordValid}
+            isMeaningValid={isMeaningValid}
+            loading={loading}
           />
         ) : (
           <NewListMode
@@ -579,18 +658,76 @@ export default function WordInputScreen() {
   )
 }
 
+interface WordTypeSelectorProps {
+  selectedType: string
+  onTypeChange: (type: string) => void
+  styles: any
+}
+
+function WordTypeSelector({ selectedType, onTypeChange, styles }: WordTypeSelectorProps) {
+  const wordTypes = [
+    { label: 'Verb', value: 'verb' },
+    { label: 'Noun', value: 'noun' },
+    { label: 'Adj', value: 'adjective' },
+    { label: 'Adv', value: 'adverb' },
+    { label: 'Other', value: 'other' },
+    { label: '?', value: 'unknown' }
+  ]
+
+  return (
+    <ScrollView 
+      horizontal 
+      showsHorizontalScrollIndicator={false}
+      style={styles.wordTypeContainer}
+      contentContainerStyle={styles.wordTypeContent}
+    >
+      {wordTypes.map((type) => (
+        <TouchableOpacity
+          key={type.value}
+          style={[
+            styles.wordTypeButton,
+            selectedType === type.value && styles.wordTypeButtonActive
+          ]}
+          onPress={() => onTypeChange(type.value)}
+        >
+          <Text style={[
+            styles.wordTypeButtonText,
+            selectedType === type.value && styles.wordTypeButtonTextActive
+          ]}>
+            {type.label}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  )
+}
+
 interface FocusModeProps {
   words: WordEntry[]
   currentIndex: number
   onUpdateWord: (index: number, field: keyof WordEntry, value: string) => void
   onNext: () => void
   onPrevious: () => void
+  onSave: () => void
   maxWords: number
   styles: any
+  isCurrentWordComplete: boolean
+  isWordValid: (word: string) => boolean
+  isMeaningValid: (meaning: string) => boolean
+  loading: boolean
 }
 
-function FocusMode({ words, currentIndex, onUpdateWord, onNext, onPrevious, maxWords, styles }: FocusModeProps) {
+function FocusMode({ words, currentIndex, onUpdateWord, onNext, onPrevious, onSave, maxWords, styles, isCurrentWordComplete, isWordValid, isMeaningValid, loading }: FocusModeProps) {
   const currentWord = words[currentIndex]
+  
+  // Check if Next button should be enabled
+  const canGoNext = isCurrentWordComplete && (currentIndex < words.length - 1 || words.length < maxWords)
+  
+  // Check if we're on the last possible word (should show Save instead of Next)
+  const isLastWord = currentIndex >= maxWords - 1
+  
+  // For Save button, we should allow saving if there are any completed words, not just the current one
+  const canSave = words.some(w => (w.word || '').trim() && (w.meaning || '').trim())
 
   return (
     <View style={styles.focusContainer}>
@@ -603,58 +740,84 @@ function FocusMode({ words, currentIndex, onUpdateWord, onNext, onPrevious, maxW
 
       <ScrollView style={styles.focusContent} showsVerticalScrollIndicator={false}>
         <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Word</Text>
           <TextInput
-            style={styles.focusInput}
-            placeholder="Enter the new vocabulary word"
+            style={styles.inlineInput}
+            placeholder="Enter word (e.g., Indolent)"
             value={currentWord?.word || ''}
             onChangeText={(value) => onUpdateWord(currentIndex, 'word', value)}
             autoCapitalize="none"
+            placeholderTextColor={styles.placeholderText?.color}
           />
         </View>
 
         <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Meaning</Text>
+          <WordTypeSelector
+            selectedType={currentWord?.word_type || 'unknown'}
+            onTypeChange={(type) => onUpdateWord(currentIndex, 'word_type', type)}
+            styles={styles}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
           <TextInput
-            style={styles.focusInput}
-            placeholder="Enter the meaning or translation"
+            style={styles.inlineInput}
+            placeholder="Definition"
             value={currentWord?.meaning || ''}
             onChangeText={(value) => onUpdateWord(currentIndex, 'meaning', value)}
+            placeholderTextColor={styles.placeholderText?.color}
           />
         </View>
 
         <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Notes (Optional)</Text>
           <TextInput
-            style={[styles.focusInput, styles.notesInput]}
-            placeholder="Add context, pronunciation, or memory aids"
+            style={[styles.inlineInput, styles.notesInput]}
+            placeholder="Notes (optional)"
             value={currentWord?.notes || ''}
             onChangeText={(value) => onUpdateWord(currentIndex, 'notes', value)}
             multiline
-            numberOfLines={3}
+            numberOfLines={2}
+            placeholderTextColor={styles.placeholderText?.color}
           />
         </View>
       </ScrollView>
 
       <View style={styles.focusNavigation}>
         <TouchableOpacity
-          style={[styles.navButton, currentIndex === 0 && styles.navButtonDisabled]}
+          style={[
+            styles.navButton, 
+            styles.navButtonSecondary,
+            currentIndex === 0 && styles.navButtonDisabled
+          ]}
           onPress={onPrevious}
           disabled={currentIndex === 0}
         >
-          <Text style={[styles.navButtonText, currentIndex === 0 && styles.navButtonTextDisabled]}>
+          <Text style={[
+            styles.navButtonText, 
+            styles.navButtonSecondaryText,
+            currentIndex === 0 && styles.navButtonTextDisabled
+          ]}>
             ← Previous
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity 
-          style={[styles.navButton, words.length >= maxWords && currentIndex === words.length - 1 && styles.navButtonDisabled]} 
-          onPress={onNext}
-          disabled={words.length >= maxWords && currentIndex === words.length - 1}
+          style={[
+            styles.navButton, 
+            (isLastWord ? (!canSave || loading) : (!canGoNext || loading)) && styles.navButtonDisabled
+          ]} 
+          onPress={isLastWord ? onSave : onNext}
+          disabled={isLastWord ? (!canSave || loading) : (!canGoNext || loading)}
         >
-          <Text style={[styles.navButtonText, words.length >= maxWords && currentIndex === words.length - 1 && styles.navButtonTextDisabled]}>
-            Next →
-          </Text>
+          {loading ? (
+            <LoadingIndicator size={16} color={styles.navButtonText.color} />
+          ) : (
+            <Text style={[
+              styles.navButtonText, 
+              (isLastWord ? (!canSave || loading) : (!canGoNext || loading)) && styles.navButtonTextDisabled
+            ]}>
+              {isLastWord ? 'Save' : 'Next →'}
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -852,9 +1015,13 @@ function AddWordModal({
                   onPress={onSaveWord}
                   disabled={formLoading}
                 >
-                  <Text style={styles.modalSaveButtonText}>
-                    {formLoading ? 'Saving...' : editingWordId ? 'Update Word' : 'Save Word'}
-                  </Text>
+                  {formLoading ? (
+                    <LoadingIndicator size={16} color={colors.cardBackground} />
+                  ) : (
+                    <Text style={styles.modalSaveButtonText}>
+                      {editingWordId ? 'Update Word' : 'Save Word'}
+                    </Text>
+                  )}
                 </TouchableOpacity>
 
                 {editingWordId && (
@@ -924,26 +1091,31 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     backgroundColor: colors.cardBackground,
+    minHeight: 60, // Ensure minimum height
   },
   progressContainer: {
     alignItems: 'center',
+    width: '100%',
   },
   progressBar: {
     width: '100%',
-    height: 8,
-    backgroundColor: colors.gray200,
-    borderRadius: 4,
+    height: 12, // Increased height for better visibility
+    backgroundColor: colors.gray300, // Darker background for better contrast
+    borderRadius: 6,
     marginBottom: SPACING.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   progressFill: {
     height: '100%',
     backgroundColor: colors.primary,
-    borderRadius: 4,
+    borderRadius: 6,
+    minWidth: 2, // Minimum width to always show some progress
   },
   progressText: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-    fontWeight: TYPOGRAPHY.medium,
+    fontSize: TYPOGRAPHY.base, // Slightly larger text
+    color: colors.textPrimary, // Darker text for better visibility
+    fontWeight: TYPOGRAPHY.semibold,
   },
   
   // Mode Toggle and Header Save Button
@@ -961,6 +1133,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderRadius: RADIUS.md,
     minWidth: 60,
     alignItems: 'center',
+    // Duolingo-style 3D effect
+    borderWidth: 2,
+    borderBottomWidth: 3,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
   },
   headerSaveButtonDisabled: {
     backgroundColor: colors.textLight,
@@ -996,29 +1178,29 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   focusHeader: {
     alignItems: 'center',
-    paddingVertical: SPACING['2xl'],
+    paddingVertical: SPACING.md,
   },
   focusTitle: {
-    fontSize: TYPOGRAPHY['2xl'],
-    fontWeight: TYPOGRAPHY.bold,
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: TYPOGRAPHY.semibold,
     color: colors.textPrimary,
     marginBottom: SPACING.xs,
   },
   focusSubtitle: {
-    fontSize: TYPOGRAPHY.base,
+    fontSize: TYPOGRAPHY.sm,
     color: colors.textSecondary,
   },
   focusContent: {
     flex: 1,
   },
   inputGroup: {
-    marginBottom: SPACING['2xl'],
+    marginBottom: SPACING.md,
   },
   inputLabel: {
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.textPrimary,
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.xs,
   },
   focusInput: {
     borderWidth: 1,
@@ -1029,34 +1211,108 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.base,
     backgroundColor: colors.cardBackground,
   },
+  // New inline input style with rounded corners
+  inlineInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: RADIUS.lg,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    fontSize: TYPOGRAPHY.base,
+    backgroundColor: colors.cardBackground,
+    color: colors.textPrimary,
+  },
+  placeholderText: {
+    color: colors.textSecondary,
+  },
+  inputInvalid: {
+    borderColor: colors.error,
+    borderWidth: 2,
+  },
   notesInput: {
-    minHeight: 80,
+    minHeight: 60,
     textAlignVertical: 'top',
+  },
+  // Word Type Selector Styles - Horizontal Menu
+  wordTypeContainer: {
+    marginVertical: SPACING.sm,
+    backgroundColor: colors.gray100,
+    borderRadius: RADIUS.md,
+    paddingVertical: SPACING.xs,
+  },
+  wordTypeContent: {
+    paddingHorizontal: SPACING.md,
+  },
+  wordTypeButton: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    marginRight: SPACING.md,
+    borderRadius: RADIUS.sm,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 50,
+  },
+  wordTypeButtonActive: {
+    backgroundColor: colors.cardBackground,
+    ...SHADOWS.sm,
+  },
+  wordTypeButtonText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.medium,
+    color: colors.textSecondary,
+  },
+  wordTypeButtonTextActive: {
+    color: colors.primary,
+    fontWeight: TYPOGRAPHY.semibold,
   },
   focusNavigation: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: SPACING.lg,
+    paddingVertical: SPACING.md,
     gap: SPACING.lg,
   },
   navButton: {
     flex: 1,
-    backgroundColor: colors.gray100,
+    backgroundColor: colors.primary,
     paddingVertical: SPACING.md,
     paddingHorizontal: SPACING.lg,
-    borderRadius: RADIUS.md,
+    borderRadius: RADIUS.lg,
     alignItems: 'center',
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   navButtonDisabled: {
-    backgroundColor: colors.cardBackground,
+    backgroundColor: colors.gray300,
+    borderColor: colors.gray400,
+    borderBottomColor: colors.gray500,
+    shadowColor: colors.gray400,
+    opacity: 0.6,
   },
   navButtonText: {
     fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.medium,
-    color: colors.textPrimary,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.cardBackground,
   },
   navButtonTextDisabled: {
-    color: colors.textLight,
+    color: colors.gray600,
+  },
+  navButtonSecondary: {
+    backgroundColor: colors.gray400,
+    borderColor: colors.gray500,
+    borderBottomColor: colors.gray600,
+    shadowColor: colors.gray500,
+  },
+  navButtonSecondaryText: {
+    color: colors.cardBackground,
   },
 
   // Full Page Mode Styles
@@ -1350,7 +1606,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 8,
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -1435,6 +1700,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingVertical: SPACING.md,
     borderRadius: RADIUS.md,
     alignItems: 'center',
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 4,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
   },
   modalSaveButtonText: {
     fontSize: TYPOGRAPHY.base,

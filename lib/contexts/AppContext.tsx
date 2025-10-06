@@ -21,6 +21,7 @@ interface AppContextType {
   startInputSession: (notebookId: string, mode: 'focus' | 'fullpage') => Promise<void>
   updateOnboardingProgress: (progress: Partial<OnboardingProgress>) => Promise<void>
   markOnboardingComplete: () => Promise<void>
+  updateNotebookLastUsed: (notebookId: string) => Promise<void>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -200,6 +201,17 @@ export function AppProvider({ children }: AppProviderProps) {
     await updateOnboardingProgress(completedProgress)
   }
 
+  const updateNotebookLastUsed = async (notebookId: string) => {
+    try {
+      await supabaseService.updateNotebookLastUsed(notebookId)
+      // Optionally refresh notebooks to get updated order
+      // but don't await to avoid slowing down user interactions
+      refreshNotebooks()
+    } catch (error) {
+      console.warn('Failed to update notebook last used:', error)
+    }
+  }
+
   const value: AppContextType = {
     appState,
     settings: appState.settings,
@@ -210,6 +222,7 @@ export function AppProvider({ children }: AppProviderProps) {
     startInputSession,
     updateOnboardingProgress,
     markOnboardingComplete,
+    updateNotebookLastUsed,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

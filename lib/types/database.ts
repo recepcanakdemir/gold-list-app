@@ -71,6 +71,7 @@ export interface Database {
           settings: Record<string, any>
           created_at: string
           updated_at: string
+          last_used_at: string
         }
         Insert: {
           id?: string
@@ -85,6 +86,7 @@ export interface Database {
           settings?: Record<string, any>
           created_at?: string
           updated_at?: string
+          last_used_at?: string
         }
         Update: {
           id?: string
@@ -99,6 +101,7 @@ export interface Database {
           settings?: Record<string, any>
           created_at?: string
           updated_at?: string
+          last_used_at?: string
         }
       }
       pages: {
@@ -177,6 +180,8 @@ export interface Database {
           times_reviewed: number
           position_in_page: number | null
           status: 'learning' | 'mastered' | 'failed' | null
+          difficulty_tag: 'NORMAL' | 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
+          cycle_count: number
           created_at: string
           updated_at: string
         }
@@ -196,6 +201,8 @@ export interface Database {
           times_reviewed?: number
           position_in_page?: number | null
           status?: 'learning' | 'mastered' | 'failed' | null
+          difficulty_tag?: 'NORMAL' | 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
+          cycle_count?: number
           created_at?: string
           updated_at?: string
         }
@@ -215,6 +222,8 @@ export interface Database {
           times_reviewed?: number
           position_in_page?: number | null
           status?: 'learning' | 'mastered' | 'failed' | null
+          difficulty_tag?: 'NORMAL' | 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
+          cycle_count?: number
           created_at?: string
           updated_at?: string
         }
@@ -298,6 +307,7 @@ export interface Database {
           words_per_day: number
           notebook_level: string
           created_at: string
+          last_used_at: string
           pages_count: number
           total_words: number
           words_ready_for_review: number
@@ -485,6 +495,7 @@ export interface Database {
       notebook_level: 'bronze' | 'silver' | 'gold'
       word_status: 'learning' | 'mastered' | 'failed'
       round_number: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
+      difficulty_tag: 'NORMAL' | 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
     }
   }
 }

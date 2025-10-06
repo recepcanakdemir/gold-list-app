@@ -13,11 +13,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
+import { useTheme } from '@/lib/contexts/ThemeContext'
 import { COLORS, TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 
 export default function SignUpScreen() {
   const router = useRouter()
   const { signUp } = useAuth()
+  const { colors } = useTheme()
+  const styles = createStyles(colors)
   
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -99,7 +102,7 @@ export default function SignUpScreen() {
               <TextInput
                 style={styles.textInput}
                 placeholder="your.email@example.com"
-                placeholderTextColor={COLORS.textLight}
+                placeholderTextColor={colors.textSecondary}
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
@@ -113,7 +116,7 @@ export default function SignUpScreen() {
               <TextInput
                 style={styles.textInput}
                 placeholder="Enter your password"
-                placeholderTextColor={COLORS.textLight}
+                placeholderTextColor={colors.textSecondary}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry
@@ -125,7 +128,7 @@ export default function SignUpScreen() {
               <TextInput
                 style={styles.textInput}
                 placeholder="Confirm your password"
-                placeholderTextColor={COLORS.textLight}
+                placeholderTextColor={colors.textSecondary}
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 secureTextEntry
@@ -193,10 +196,10 @@ export default function SignUpScreen() {
   )
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.cardBackground,
+    backgroundColor: colors.cardBackground,
   },
   keyboardView: {
     flex: 1,
@@ -222,7 +225,7 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     fontSize: TYPOGRAPHY.xl,
-    color: COLORS.textPrimary,
+    color: colors.textPrimary,
   },
   titleSection: {
     marginBottom: SPACING['4xl'],
@@ -230,12 +233,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: TYPOGRAPHY['3xl'],
     fontWeight: TYPOGRAPHY.bold,
-    color: COLORS.textPrimary,
+    color: colors.textPrimary,
     marginBottom: SPACING.sm,
   },
   subtitle: {
     fontSize: TYPOGRAPHY.base,
-    color: COLORS.textSecondary,
+    color: colors.textSecondary,
     lineHeight: TYPOGRAPHY.base * 1.4,
   },
   form: {
@@ -248,25 +251,34 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.medium,
-    color: COLORS.textPrimary,
+    color: colors.textPrimary,
   },
   textInput: {
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     borderRadius: RADIUS.lg,
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.lg,
     fontSize: TYPOGRAPHY.base,
-    backgroundColor: COLORS.cardBackground,
-    color: COLORS.textPrimary,
+    backgroundColor: colors.cardBackground,
+    color: colors.textPrimary,
   },
   createButton: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     borderRadius: RADIUS.lg,
     paddingVertical: SPACING.lg,
     alignItems: 'center',
     marginTop: SPACING.lg,
-    ...SHADOWS.sm,
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 5,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   createButtonDisabled: {
     opacity: 0.6,
@@ -274,7 +286,7 @@ const styles = StyleSheet.create({
   createButtonText: {
     fontSize: TYPOGRAPHY.lg,
     fontWeight: TYPOGRAPHY.semibold,
-    color: COLORS.cardBackground,
+    color: colors.cardBackground,
   },
   divider: {
     flexDirection: 'row',
@@ -285,11 +297,11 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   dividerText: {
     fontSize: TYPOGRAPHY.sm,
-    color: COLORS.textSecondary,
+    color: colors.textSecondary,
   },
   socialSection: {
     gap: SPACING.lg,
@@ -299,9 +311,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.cardBackground,
+    backgroundColor: colors.cardBackground,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     borderRadius: RADIUS.lg,
     paddingVertical: SPACING.lg,
     gap: SPACING.md,
@@ -318,7 +330,7 @@ const styles = StyleSheet.create({
   socialButtonText: {
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.medium,
-    color: COLORS.textPrimary,
+    color: colors.textPrimary,
   },
   signInSection: {
     flexDirection: 'row',
@@ -328,24 +340,24 @@ const styles = StyleSheet.create({
   },
   signInText: {
     fontSize: TYPOGRAPHY.base,
-    color: COLORS.textSecondary,
+    color: colors.textSecondary,
   },
   signInLink: {
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.semibold,
-    color: COLORS.primary,
+    color: colors.primary,
   },
   footer: {
     paddingBottom: SPACING['2xl'],
   },
   footerText: {
     fontSize: TYPOGRAPHY.sm,
-    color: COLORS.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
     lineHeight: TYPOGRAPHY.sm * 1.4,
   },
   footerLink: {
-    color: COLORS.primary,
+    color: colors.primary,
     fontWeight: TYPOGRAPHY.medium,
   },
 })

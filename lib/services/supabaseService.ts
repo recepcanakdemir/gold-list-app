@@ -147,6 +147,7 @@ export interface CreateWordData {
   meaning: string
   notes?: string
   example_sentence?: string
+  word_type?: string
   position_in_page: number
 }
 
@@ -329,6 +330,26 @@ class SupabaseService {
     } as PageWithWords
   }
 
+  // Update notebook last used timestamp
+  async updateNotebookLastUsed(notebookId: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('notebooks')
+        .update({ 
+          last_used_at: new Date().toISOString(),
+          updated_at: new Date().toISOString() 
+        })
+        .eq('id', notebookId)
+
+      if (error) {
+        console.warn('Failed to update notebook last used timestamp:', error)
+        // Don't throw - this is a nice-to-have feature
+      }
+    } catch (error) {
+      console.warn('Error updating notebook last used:', error)
+    }
+  }
+
   // Rest of the methods remain the same...
   async getNotebooks(): Promise<Notebook[]> {
     const { data: { user } } = await supabase.auth.getUser()
@@ -338,6 +359,7 @@ class SupabaseService {
       .from('notebooks')
       .select('*')
       .eq('user_id', user.id)
+      .order('last_used_at', { ascending: false })
       .order('created_at', { ascending: false })
 
     if (error) throw error
@@ -377,6 +399,7 @@ class SupabaseService {
       meaning: word.meaning || word.translation,
       notes: word.notes || null,
       example_sentence: word.example_sentence || null,
+      word_type: word.word_type || 'unknown',
       position_in_page: word.position_in_page,
       current_round: 1 as 1,  // Cast to round_number enum type
       is_mastered: false,
@@ -510,6 +533,7 @@ class SupabaseService {
           translation,
           meaning,
           notes,
+          word_type,
           current_round,
           review_date,
           last_reviewed,
@@ -937,7 +961,7 @@ class SupabaseService {
         const wordIds = deduplicatedReviews.map(r => r.wordId)
         const { data: words, error: fetchError } = await supabase
           .from('words')
-          .select('id, current_round, notebook_id, page_id, times_reviewed, last_reviewed, created_at')
+          .select('id, current_round, notebook_id, page_id, times_reviewed, last_reviewed, created_at, difficulty_tag, cycle_count')
           .in('id', wordIds)
 
         if (fetchError) throw fetchError
@@ -989,13 +1013,35 @@ class SupabaseService {
             // Forgotten words advance to next round (1-12) - simplified system
             const nextRound = word.current_round + 1
             
+            // Ensure default values for new fields
+            if (updateData.difficulty_tag === undefined) {
+              updateData.difficulty_tag = 'NORMAL'
+            }
+            if (updateData.cycle_count === undefined) {
+              updateData.cycle_count = 0
+            }
+            
             if (nextRound > 12) {
-              // Even Gold Round 4 failures (Round 12+) become mastered
-              updateData.is_mastered = true
-              updateData.status = 'mastered'
-              updateData.current_round = 12  // Cap at round 12
-              updateData.review_date = null
-              console.log(`🏆 Word ${word.id} reached maximum difficulty (Gold Round 4) - now mastered`)
+              // Gold Round 4 failure - cycle back to Round 1 with increased difficulty
+              const currentCycle = (word as any).cycle_count || 0
+              const newCycle = currentCycle + 1
+              
+              let newDifficultyTag: 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
+              if (newCycle === 1) {
+                newDifficultyTag = 'EXTREMELY_HARD'
+              } else if (newCycle === 2) {
+                newDifficultyTag = 'MASTER_LEVEL'
+              } else {
+                newDifficultyTag = 'LEGENDARY'
+              }
+              
+              updateData.current_round = 1  // Reset to Round 1 (Bronze Round 1)
+              updateData.difficulty_tag = newDifficultyTag
+              updateData.cycle_count = newCycle
+              updateData.review_date = nextReviewDateString
+              updateData.status = 'learning'
+              
+              console.log(`🔄 Word ${word.id} failed Gold Round 4 - cycling to ${newDifficultyTag} (cycle ${newCycle})`)
             } else {
               // Continue learning at next round
               updateData.current_round = nextRound as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12

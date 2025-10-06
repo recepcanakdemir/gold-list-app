@@ -319,6 +319,34 @@ export default function NotebookDetailsScreen() {
     }
   }
 
+  const getPageBorderColor = (page: PageData) => {
+    // If locked, always show darker gray
+    if (page.status === 'locked') return '#9CA3AF'
+    
+    // Use darker versions for Duolingo-style borders
+    switch (page.round) {
+      case 1: return '#DC2626' // Darker Red
+      case 2: return '#059669' // Darker Green  
+      case 3: return '#2563EB' // Darker Blue
+      case 4: return '#D97706' // Darker Yellow
+      default: return colors.primaryDark || '#1E40AF' // Fallback
+    }
+  }
+
+  const getPageBottomBorderColor = (page: PageData) => {
+    // If locked, always show darkest gray
+    if (page.status === 'locked') return '#6B7280'
+    
+    // Use darkest versions for bottom border depth
+    switch (page.round) {
+      case 1: return '#B91C1C' // Darkest Red
+      case 2: return '#047857' // Darkest Green  
+      case 3: return '#1E40AF' // Darkest Blue
+      case 4: return '#B45309' // Darkest Yellow
+      default: return colors.primaryDark || '#1E3A8A' // Fallback
+    }
+  }
+
   const handlePagePress = (page: PageData) => {
     if (page.status === 'locked') {
       const unlockDate = page.unlockDate ? new Date(page.unlockDate).toLocaleDateString() : 'Unknown'
@@ -475,7 +503,12 @@ export default function NotebookDetailsScreen() {
         <TouchableOpacity
           style={[
             styles.pageButton,
-            { backgroundColor: color },
+            { 
+              backgroundColor: color,
+              borderColor: getPageBorderColor(page),
+              borderBottomColor: getPageBottomBorderColor(page),
+              shadowColor: getPageBorderColor(page),
+            },
             page.status === 'locked' && styles.pageButtonLocked,
             page.type === 'checkpoint' && styles.checkpointButton,
             page.type === 'story' && styles.storyButton,
@@ -807,8 +840,14 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderRadius: 45,
     justifyContent: 'center',
     alignItems: 'center',
-    ...SHADOWS.md,
     position: 'relative',
+    // Duolingo-style 3D effect
+    borderWidth: 4,
+    borderBottomWidth: 6,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   pageButtonLocked: {
     opacity: 0.4,
@@ -923,7 +962,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderRadius: RADIUS.lg,
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.sm,
-    ...SHADOWS.sm,
+    // Duolingo-style 3D effect
+    borderWidth: 3,
+    borderBottomWidth: 4,
+    borderColor: '#D97706',
+    borderBottomColor: '#B45309',
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
   },
   actionButtonText: {
     fontSize: TYPOGRAPHY.sm,

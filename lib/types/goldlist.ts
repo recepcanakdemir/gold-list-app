@@ -12,6 +12,7 @@ export type Round = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 export type NotebookLevel = 'bronze' | 'silver' | 'gold'
 export type WordStatus = 'learning' | 'mastered' | 'failed'
 export type SubscriptionStatus = 'free' | 'weekly' | 'annual'
+export type DifficultyTag = 'NORMAL' | 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
 
 export interface GoldListSettings {
   wordsPerDay: number
