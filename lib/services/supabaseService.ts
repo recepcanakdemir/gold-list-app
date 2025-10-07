@@ -182,7 +182,8 @@ class SupabaseService {
         language: data.language,
         language_code: data.language_code,
         words_per_day: data.words_per_day,
-        notebook_level: 'bronze' // Explicitly set all manually created notebooks as Bronze
+        notebook_level: 'bronze', // Explicitly set all manually created notebooks as Bronze
+        created_at: getCurrentDate().toISOString() // Use simulation time in dev, real time in production
       })
       .select()
       .single()
@@ -204,7 +205,8 @@ class SupabaseService {
         is_completed: false,
         is_unlocked: true,
         unlock_date: getCurrentDate().toISOString().split('T')[0],
-        next_review_date: null
+        next_review_date: null,
+        created_at: getCurrentDate().toISOString() // Use simulation time in dev, real time in production
       })
       .select()
       .single()
@@ -219,7 +221,7 @@ class SupabaseService {
   }
 
   // Get or create today's page for the notebook
-  async getTodaysPage(notebookId: string, currentSimulatedDay?: number): Promise<PageWithWords | null> {
+  async getTodaysPage(notebookId: string): Promise<PageWithWords | null> {
     // Apply debounce to prevent excessive calls
     const callKey = `todaysPage-${notebookId}`
     const now = Date.now()
@@ -233,7 +235,7 @@ class SupabaseService {
     this.reviewCallTracker.set(callKey, now)
     
     // Create and store the pending promise
-    const promise = this._performGetTodaysPage(notebookId, currentSimulatedDay)
+    const promise = this._performGetTodaysPage(notebookId)
     this.pendingCalls.set(callKey, promise)
     
     try {
@@ -245,7 +247,7 @@ class SupabaseService {
     }
   }
   
-  private async _performGetTodaysPage(notebookId: string, currentSimulatedDay?: number): Promise<PageWithWords | null> {
+  private async _performGetTodaysPage(notebookId: string): Promise<PageWithWords | null> {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error('Not authenticated')
 
@@ -259,21 +261,14 @@ class SupabaseService {
     if (notebookError) throw notebookError
     if (!notebook) return null
 
-    // Use provided simulated day or calculate from notebook creation
-    let todaysPageNumber: number
-    
-    if (currentSimulatedDay !== undefined) {
-      // Convert simulation day to page number (simulation day 0 = page 1)
-      todaysPageNumber = currentSimulatedDay + 1
-    } else {
-      // Fallback: calculate from notebook creation time
-      const currentDateTime = getCurrentDate()
-      const notebookCreated = new Date(notebook.created_at)
-      const daysSinceCreation = Math.floor(
-        (currentDateTime.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
-      ) + 1 // Day 1, not Day 0
-      todaysPageNumber = daysSinceCreation
-    }
+    // Always calculate page number from notebook-specific creation time
+    // This ensures each notebook has its own independent timeline
+    const currentDateTime = getCurrentDate()
+    const notebookCreated = new Date(notebook.created_at)
+    const daysSinceCreation = Math.floor(
+      (currentDateTime.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
+    ) + 1 // Day 1, not Day 0
+    const todaysPageNumber = daysSinceCreation
 
     // Check if today's page already exists
     let { data: existingPage, error: pageError } = await supabase
@@ -301,7 +296,8 @@ class SupabaseService {
           is_completed: false,
           is_unlocked: true,
           unlock_date: getCurrentDate().toISOString().split('T')[0],
-          next_review_date: null
+          next_review_date: null,
+          created_at: getCurrentDate().toISOString() // Use simulation time in dev, real time in production
         })
         .select(`
           *,
@@ -490,8 +486,8 @@ class SupabaseService {
   }
 
   async getPages(notebookId: string): Promise<PageWithWords[]> {
-    // For now, return a simplified version
-    const { data, error } = await supabase
+    // Fetch actual pages from database with all context fields
+    const { data: realPages, error } = await supabase
       .from('pages')
       .select(`
         *,
@@ -501,7 +497,98 @@ class SupabaseService {
       .order('page_number', { ascending: true })
 
     if (error) throw error
-    return data || []
+    
+    const realPagesData = realPages || []
+    
+    // Generate 200 total pages (real + virtual) while preserving context data
+    const allPages: PageWithWords[] = []
+    
+    // Get notebook creation date for unlock logic
+    const { data: notebook } = await supabase
+      .from('notebooks')
+      .select('created_at')
+      .eq('id', notebookId)
+      .single()
+    
+    const notebookCreated = notebook ? new Date(notebook.created_at) : new Date()
+    const currentDate = getCurrentDate()
+    
+    // Calculate days since THIS notebook's creation (notebook-specific timeline)
+    const daysSinceNotebookCreation = Math.floor(
+      (currentDate.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
+    ) + 1 // Add 1 because day 1 is creation day
+    
+    for (let pageNum = 1; pageNum <= 200; pageNum++) {
+      // Check if real page exists for this page number
+      const existingPage = realPagesData.find(p => p.page_number === pageNum)
+      
+      if (existingPage) {
+        // Use existing page with all its data including context
+        allPages.push(existingPage)
+      } else {
+        // Create virtual page with notebook-specific unlock logic
+        const isUnlocked = pageNum <= daysSinceNotebookCreation
+        const unlockDate = new Date(notebookCreated)
+        unlockDate.setDate(unlockDate.getDate() + pageNum - 1)
+        
+        // Create virtual page with null context initially
+        const virtualPage: PageWithWords = {
+          id: `virtual-${pageNum}`,
+          notebook_id: notebookId,
+          page_number: pageNum,
+          date_created: unlockDate.toISOString().split('T')[0],
+          target_round: 1,
+          words_count: 0,
+          is_completed: false,
+          is_unlocked: isUnlocked,
+          unlock_date: unlockDate.toISOString().split('T')[0],
+          next_review_date: null,
+          created_at: unlockDate.toISOString(),
+          updated_at: unlockDate.toISOString(),
+          // Context fields - initially null for virtual pages
+          context_title: null,
+          context_source: null,
+          context_description: null,
+          context_theme: null,
+          // Words array
+          words: []
+        }
+        
+        allPages.push(virtualPage)
+      }
+    }
+    
+    return allPages
+  }
+
+  // Create a new page in the database
+  async createPage(notebookId: string, pageNumber: number): Promise<Page> {
+    const today = getCurrentDate()
+    
+    const { data: page, error } = await supabase
+      .from('pages')
+      .insert({
+        notebook_id: notebookId,
+        page_number: pageNumber,
+        date_created: today.toISOString().split('T')[0],
+        target_round: 1,
+        words_count: 0,
+        is_completed: false,
+        is_unlocked: true,
+        unlock_date: today.toISOString().split('T')[0],
+        next_review_date: null,
+        created_at: today.toISOString(), // Use simulation time in dev, real time in production
+        // Context fields start as null
+        context_title: null,
+        context_source: null,
+        context_description: null,
+        context_theme: null
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    return page
   }
 
   // Check if there are any words due for review today across all user's notebooks
@@ -533,6 +620,7 @@ class SupabaseService {
           translation,
           meaning,
           notes,
+          example_sentence,
           word_type,
           current_round,
           review_date,
@@ -543,6 +631,10 @@ class SupabaseService {
             id,
             page_number,
             notebook_id,
+            context_title,
+            context_source,
+            context_description,
+            context_theme,
             notebook:notebooks!inner(user_id, title, notebook_level)
           )
         `)
@@ -607,14 +699,73 @@ class SupabaseService {
     }
   }
 
+  async hasWordsForReviewTodayForNotebook(notebookId: string): Promise<{ hasReviews: boolean; pageNumber?: number }> {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('Not authenticated')
+
+    const currentDate = getCurrentDate()
+    const reviewDate = new Date(currentDate)
+    reviewDate.setHours(0, 0, 0, 0)
+
+    const { data: reviewableWords, error } = await supabase
+      .from('words')
+      .select(`
+        id,
+        page:pages!words_page_id_fkey(
+          id,
+          page_number,
+          notebook_id,
+          created_at
+        )
+      `)
+      .eq('page.notebook_id', notebookId)
+      .eq('is_mastered', false)
+      .not('review_date', 'is', null)
+      .lte('review_date', reviewDate.toISOString())
+
+    if (error) {
+      console.error('Error checking words for review:', error)
+      throw error
+    }
+
+    if (!reviewableWords || reviewableWords.length === 0) {
+      return { hasReviews: false }
+    }
+
+    const firstWord = reviewableWords[0]
+    const page = firstWord.page as any
+    
+    // Defensive check for null page data
+    if (!page) {
+      console.warn(`Word ${firstWord.id} has null page data - skipping review check for notebook ${notebookId}`)
+      return { hasReviews: false }
+    }
+    
+    return { 
+      hasReviews: true,
+      pageNumber: page.page_number
+    }
+  }
+
   async getWordsForReview(notebookId: string): Promise<WordWithReviews[]> {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error('Not authenticated')
 
-    // Get all words from the notebook directly
+    // Get all words from the notebook with page data including context
     const { data: wordsData, error } = await supabase
       .from('words')
-      .select('*')
+      .select(`
+        *,
+        page:pages!page_id(
+          id,
+          page_number,
+          notebook_id,
+          context_title,
+          context_source,
+          context_description,
+          context_theme
+        )
+      `)
       .eq('notebook_id', notebookId)
 
     if (error) throw error
@@ -1797,6 +1948,44 @@ class SupabaseService {
         pendingSilverPagesCount: validSilverPages.length
       }
     }, 'checkPendingMigrations')
+  }
+
+  // =============================================
+  // PAGE CONTEXT MANAGEMENT
+  // =============================================
+
+  async updatePageContext(pageId: string, context: string | null): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase
+        .from('pages')
+        .update({
+          context_title: context,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', pageId)
+
+      if (error) {
+        throw new Error(`Failed to update page context: ${error.message}`)
+      }
+
+      console.log('✅ Page context updated successfully')
+    }, 'updatePageContext')
+  }
+
+  async getPageContext(pageId: string): Promise<string | null> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .from('pages')
+        .select('context_title')
+        .eq('id', pageId)
+        .single()
+
+      if (error) {
+        throw new Error(`Failed to get page context: ${error.message}`)
+      }
+
+      return data?.context_title || null
+    }, 'getPageContext')
   }
 }
 

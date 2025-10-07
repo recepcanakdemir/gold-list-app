@@ -1,4 +1,9 @@
--- Update word review result and advance round or mark as mastered
+-- =============================================
+-- FIX 14-DAY REVIEW INTERVALS - URGENT DATABASE UPDATE
+-- Run this SQL in Supabase SQL Editor to restore proper Gold List Method timing
+-- =============================================
+
+-- Update the update_word_review_result function with correct 14-day progression logic
 CREATE OR REPLACE FUNCTION update_word_review_result(
   p_word_id uuid,
   p_remembered boolean,
@@ -82,3 +87,9 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Grant permissions
+GRANT EXECUTE ON FUNCTION update_word_review_result(UUID, BOOLEAN, DATE) TO authenticated;
+
+-- Success message
+SELECT '✅ 14-day review intervals FIXED! Words will now follow proper Day 1→15→29→43 progression.' as status;

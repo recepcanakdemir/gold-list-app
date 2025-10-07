@@ -123,6 +123,10 @@ export interface Database {
           last_reviewed: string | null
           created_at: string
           updated_at: string
+          context_title: string | null
+          context_source: string | null
+          context_description: string | null
+          context_theme: string | null
         }
         Insert: {
           id?: string
@@ -142,6 +146,10 @@ export interface Database {
           last_reviewed?: string | null
           created_at?: string
           updated_at?: string
+          context_title?: string | null
+          context_source?: string | null
+          context_description?: string | null
+          context_theme?: string | null
         }
         Update: {
           id?: string
@@ -161,6 +169,10 @@ export interface Database {
           last_reviewed?: string | null
           created_at?: string
           updated_at?: string
+          context_title?: string | null
+          context_source?: string | null
+          context_description?: string | null
+          context_theme?: string | null
         }
       }
       words: {

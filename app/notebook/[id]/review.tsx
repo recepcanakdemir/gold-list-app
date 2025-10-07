@@ -722,6 +722,12 @@ export default function ReviewScreen() {
                 }],
               }
             ]}>
+              {/* Example Sentence at the top if available */}
+              {word.example_sentence && (
+                <Text style={[styles.cardExampleSentence, { color: '#000000' }]}>
+                  "{word.example_sentence}"
+                </Text>
+              )}
               <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
               {word.word_type && word.word_type !== 'unknown' && (
                 <Text style={styles.wordTypeSubtle}>
@@ -759,6 +765,12 @@ export default function ReviewScreen() {
                 bottom: 0,
               }
             ]}>
+              {/* Example Sentence at the top if available */}
+              {word.example_sentence && (
+                <Text style={[styles.cardExampleSentence, { color: '#000000' }]}>
+                  "{word.example_sentence}"
+                </Text>
+              )}
               <Text style={[styles.cardMeaning, { color: '#000000' }]}>{word.meaning}</Text>
               <Text style={[styles.cardOriginal, { color: '#000000' }]}>{word.word}</Text>
               {word.word_type && word.word_type !== 'unknown' && (
@@ -1353,6 +1365,13 @@ export default function ReviewScreen() {
             <Text style={styles.progressText}>
               {currentIndex + 1} of {words.length}
             </Text>
+            {currentWord?.page?.context_title && (
+              <Text style={styles.contextHint}>
+                📖 {currentWord.page.context_title.length > 50 ? 
+                    currentWord.page.context_title.substring(0, 47) + '...' : 
+                    currentWord.page.context_title}
+              </Text>
+            )}
           </View>
         </View>
 
@@ -1378,6 +1397,7 @@ export default function ReviewScreen() {
           <Text style={styles.statLabel}>Accuracy</Text>
         </View>
       </View>
+
 
       {/* Card Deck Stack - Deck Swiper System */}
       <View style={styles.cardContainer}>
@@ -1649,6 +1669,15 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 16,
+  },
+  cardExampleSentence: {
+    fontSize: 18,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: 20,
+    paddingHorizontal: 16,
+    opacity: 0.8,
+    lineHeight: 24,
   },
   cardMeaning: {
     fontSize: 28,
@@ -2347,4 +2376,15 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
   },
+
+
+  // Context hint under progress counter
+  contextHint: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+
 })

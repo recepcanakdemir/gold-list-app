@@ -112,7 +112,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
       
       for (const notebook of notebooks) {
         // Try to get today's page for each notebook - this will auto-create if needed
-        await supabaseService.getTodaysPage(notebook.id, newDay)
+        await supabaseService.getTodaysPage(notebook.id)
       }
     } catch (error) {
       console.warn('⚠️ Error during auto-page creation:', error)

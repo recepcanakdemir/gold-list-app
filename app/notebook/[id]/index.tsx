@@ -7,6 +7,8 @@ import {
   ScrollView,
   Dimensions,
   Alert,
+  Modal,
+  TextInput,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router'
@@ -49,6 +51,9 @@ export default function NotebookDetailsScreen() {
   const [loading, setLoading] = useState(true)
   const [selectedPage, setSelectedPage] = useState<PageData | null>(null)
   const [autoFocusedPageNumber, setAutoFocusedPageNumber] = useState<number | null>(null)
+  const [contextModalVisible, setContextModalVisible] = useState(false)
+  const [contextPageId, setContextPageId] = useState<string | null>(null)
+  const [contextText, setContextText] = useState('')
   const scrollViewRef = useRef<ScrollView>(null)
 
   useEffect(() => {
@@ -386,6 +391,68 @@ export default function NotebookDetailsScreen() {
     }
   }
 
+  const handleContextPress = async (page: PageData) => {
+    try {
+      // Check if this is a virtual page
+      if (page.id.startsWith('virtual-')) {
+        // For virtual pages, start with empty context
+        setContextText('')
+        setContextPageId(page.id)
+        setContextModalVisible(true)
+        setSelectedPage(null)
+        return
+      }
+      
+      // For real pages, load existing context
+      const existingContext = await supabaseService.getPageContext(page.id)
+      setContextText(existingContext || '')
+      setContextPageId(page.id)
+      setContextModalVisible(true)
+      setSelectedPage(null) // Close speech bubble
+    } catch (error) {
+      console.error('Error loading page context:', error)
+      Alert.alert('Error', 'Failed to load page context')
+    }
+  }
+
+  const handleSaveContext = async () => {
+    if (!contextPageId) return
+    
+    try {
+      let realPageId = contextPageId
+      
+      // If this is a virtual page, create a real page first
+      if (contextPageId.startsWith('virtual-')) {
+        const pageNumber = parseInt(contextPageId.replace('virtual-', ''))
+        const createdPage = await supabaseService.createPage(id!, pageNumber)
+        realPageId = createdPage.id
+        console.log(`✅ Created real page ${pageNumber} with ID: ${realPageId}`)
+      }
+      
+      // Update context for the real page
+      await supabaseService.updatePageContext(realPageId, contextText.trim() || null)
+      
+      // Reload notebook data to reflect changes
+      await loadNotebookData()
+      
+      // Close modal and reset state
+      setContextModalVisible(false)
+      setContextPageId(null)
+      setContextText('')
+      
+      Alert.alert('Success', 'Page context saved!')
+    } catch (error) {
+      console.error('Error saving page context:', error)
+      Alert.alert('Error', 'Failed to save page context')
+    }
+  }
+
+  const handleCancelContext = () => {
+    setContextModalVisible(false)
+    setContextPageId(null)
+    setContextText('')
+  }
+
   const handleActionPress = (page: PageData) => {
     // For Silver/Gold notebooks, only allow review actions
     const notebookLevel = notebook?.notebook_level || 'bronze'
@@ -535,9 +602,17 @@ export default function NotebookDetailsScreen() {
           ]}>
             <View style={styles.speechBubbleContent}>
               <Text style={styles.speechBubbleTitle}>
-                {page.type === 'checkpoint' ? 'Checkpoint' : 
-                 page.type === 'story' ? 'Story' :
-                 page.type === 'review' ? 'Review' : 'Lesson'} {page.pageNumber}
+                {(() => {
+                  const baseTitle = page.type === 'checkpoint' ? 'Checkpoint' : 
+                                   page.type === 'story' ? 'Story' :
+                                   page.type === 'review' ? 'Review' : 'Lesson'
+                  
+                  // Find the actual page data to get context
+                  const pageData = pages.find(p => p.id === page.id)
+                  const context = pageData?.context_title
+                  
+                  return context ? `${baseTitle} ${page.pageNumber}: ${context}` : `${baseTitle} ${page.pageNumber}`
+                })()}
               </Text>
               <Text style={styles.speechBubbleDescription}>
                 {(() => {
@@ -656,14 +731,26 @@ export default function NotebookDetailsScreen() {
                 }
                 
                 return (
-                  <TouchableOpacity 
-                    style={styles.actionButton}
-                    onPress={() => handleActionPress(page)}
-                  >
-                    <Text style={styles.actionButtonText}>
-                      {page.type === 'review' ? 'Review Now' : 'Add Words'}
-                    </Text>
-                  </TouchableOpacity>
+                  <View>
+                    <TouchableOpacity 
+                      style={styles.actionButton}
+                      onPress={() => handleActionPress(page)}
+                    >
+                      <Text style={styles.actionButtonText}>
+                        {page.type === 'review' ? 'Review Now' : 'Add Words'}
+                      </Text>
+                    </TouchableOpacity>
+                    {page.type !== 'review' && (
+                      <TouchableOpacity 
+                        style={[styles.actionButton, styles.contextButton]}
+                        onPress={() => handleContextPress(page)}
+                      >
+                        <Text style={[styles.actionButtonText, styles.contextButtonText]}>
+                          Add Context
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 )
               })()}
             </View>
@@ -772,6 +859,45 @@ export default function NotebookDetailsScreen() {
 
       {/* Bottom Navigation */}
       <BottomNav />
+
+      {/* Context Input Modal */}
+      <Modal
+        visible={contextModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={handleCancelContext}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={handleCancelContext}>
+              <Text style={styles.modalCancelButton}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Add Page Context</Text>
+            <TouchableOpacity onPress={handleSaveContext}>
+              <Text style={styles.modalSaveButton}>Save</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.modalContent}>
+            <Text style={styles.modalLabel}>
+              Context helps generate better AI sentences for your vocabulary words
+            </Text>
+            <TextInput
+              style={styles.contextInput}
+              value={contextText}
+              onChangeText={setContextText}
+              placeholder="e.g., Business English, Travel Conversation..."
+              placeholderTextColor={colors.textSecondary}
+              multiline
+              autoFocus
+              maxLength={50}
+            />
+            <Text style={styles.characterCount}>
+              {contextText.length}/50 characters
+            </Text>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -1033,5 +1159,75 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.sm,
     color: colors.textSecondary,
     textAlign: 'center',
+  },
+
+  // Context button styles
+  contextButton: {
+    backgroundColor: colors.cardBackground,
+    borderColor: colors.border,
+    borderBottomColor: colors.border,
+    shadowColor: colors.border,
+    marginTop: SPACING.sm,
+  },
+  contextButtonText: {
+    color: colors.textSecondary,
+  },
+
+  // Modal styles
+  modalContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  modalTitle: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textPrimary,
+  },
+  modalCancelButton: {
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textSecondary,
+  },
+  modalSaveButton: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.primary,
+  },
+  modalContent: {
+    flex: 1,
+    paddingHorizontal: SPACING.xl,
+    paddingTop: SPACING.xl,
+  },
+  modalLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textSecondary,
+    marginBottom: SPACING.lg,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  contextInput: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textPrimary,
+    textAlignVertical: 'top',
+    minHeight: 120,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  characterCount: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    marginTop: SPACING.sm,
   },
 })

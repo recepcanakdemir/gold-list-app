@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
 } from 'react-native'
 import CountryFlag from 'react-native-country-flag'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { supabaseService } from '@/lib/services/supabaseService'
@@ -164,6 +164,9 @@ export default function HomeScreen() {
   const [reviewNotebookId, setReviewNotebookId] = useState<string | undefined>()
   const [reviewPageNumber, setReviewPageNumber] = useState<number | undefined>()
   
+  // PERFORMANCE FIX: Removed per-notebook review state that was causing excessive DB calls
+  // Using simple global review detection instead
+  
   // Loading states for async operations
   const [isPracticeButtonLoading, setIsPracticeButtonLoading] = useState(false)
   const [isAddWordsButtonLoading, setIsAddWordsButtonLoading] = useState(false)
@@ -192,6 +195,9 @@ export default function HomeScreen() {
       setHasReviewsToday(false)
     }
   }
+
+  // PERFORMANCE FIX: Removed per-notebook review checking function
+  // This was causing hundreds of database calls and severe performance issues
 
   // Track if we've already checked reviews to prevent multiple checks
   const [hasCheckedReviews, setHasCheckedReviews] = useState(false)
@@ -256,51 +262,45 @@ export default function HomeScreen() {
     return () => clearInterval(interval)
   }, [])
 
-  const getTodayStatus = () => {
+
+  const getNotebookStatus = (notebook: NotebookWithStats) => {
     if (appState.notebooks.length === 0) return { type: 'no_notebook', text: 'Create Your First Notebook' }
-    
-    // Always use Bronze notebook for adding new words
-    const bronzeNotebook = appState.notebooks.find(n => !n.notebook_level || n.notebook_level === 'bronze')
-    if (!bronzeNotebook) return { type: 'no_notebook', text: 'Create Your First Notebook' }
     
     const currentTodayProgress = todayProgress || { wordsAdded: 0, goal: 20, completed: false }
     
-    // Priority 1: Reviews available
-    if (hasReviewsToday && reviewNotebookId) {
+    // PERFORMANCE FIX: Use global review detection instead of per-notebook
+    // Per-notebook checking was causing severe performance issues
+    
+    // Priority 1: Reviews available (global detection)
+    if (hasReviewsToday && reviewNotebookId === notebook.id) {
       return { 
         type: 'review', 
         text: 'Review Today\'s Words', 
-        route: `/notebook/${reviewNotebookId}/review${reviewPageNumber ? `?page=${reviewPageNumber}` : ''}` 
+        route: `/notebook/${notebook.id}/review${reviewPageNumber ? `?page=${reviewPageNumber}` : ''}` 
       }
     }
     
-    // Priority 2: Words to add today
-    if (!currentTodayProgress.completed) {
+    // Priority 2: Words to add today (only for Bronze notebooks)
+    if ((!notebook.notebook_level || notebook.notebook_level === 'bronze') && !currentTodayProgress.completed) {
       // Calculate current page number (convert 0-based simulation to 1-based page numbers)
       const currentPageNumber = currentSimulatedDay + 1
       return { 
         type: 'add_words', 
         text: 'Add Today\'s Words', 
-        route: `/notebook/${bronzeNotebook.id}?focusPage=${currentPageNumber}&openBubble=true` 
+        route: `/notebook/${notebook.id}?focusPage=${currentPageNumber}&openBubble=true` 
       }
     }
     
-    // Priority 3: All done for today
-    return { type: 'done', text: 'You\'re All Done Today! 🎉', route: null }
-  }
-
-  const getNotebookStatus = (notebook: NotebookWithStats) => {
-    // For Bronze notebooks, use the existing logic
-    if (!notebook.notebook_level || notebook.notebook_level === 'bronze') {
-      return getTodayStatus()
+    // Priority 3: All done for today or read-only notebook
+    if (notebook.notebook_level === 'silver' || notebook.notebook_level === 'gold') {
+      return {
+        type: 'info',
+        text: `${notebook.notebook_level.charAt(0).toUpperCase() + notebook.notebook_level.slice(1)} Level`,
+        route: `/notebook/${notebook.id}`
+      }
     }
     
-    // For Silver/Gold notebooks, they are read-only progression trackers
-    return {
-      type: 'info',
-      text: `${notebook.notebook_level.charAt(0).toUpperCase() + notebook.notebook_level.slice(1)} Level`,
-      route: `/notebook/${notebook.id}`
-    }
+    return { type: 'done', text: 'You\'re All Done Today! 🎉', route: null }
   }
 
   // Removed unused getPendingReviews function
@@ -318,13 +318,13 @@ export default function HomeScreen() {
   }
   
   // State for badges
-  const [notebookBadges, setNotebookBadges] = useState<Array<{
+  const [notebookBadges, setNotebookBadges] = useState<{
     id: string
     badgeType: 'silver' | 'gold'
     totalWords: number
     reviewableWords: number
     bronzeNotebookTitle: string
-  }>>([])
+  }[]>([])
 
   // Load badges for Bronze notebook
   const loadNotebookBadges = async (bronzeNotebookId: string) => {
@@ -373,6 +373,42 @@ export default function HomeScreen() {
       loadNotebookBadges(bronze[0].id)
     }
   }, [appState.notebooks])
+  
+  // PERFORMANCE FIX: Temporarily disabled per-notebook review checking
+  // This was causing hundreds of database calls and severe performance issues
+  const checkAllNotebookReviews = useCallback(async () => {
+    console.log('🚫 Per-notebook review checking DISABLED for performance')
+    // Disabled - was causing excessive database calls
+    return
+  }, [])
+  
+  // DISABLED: Strategic trigger 1 - was causing performance issues
+  // useFocusEffect(
+  //   useCallback(() => {
+  //     if (!hasCheckedThisSession && profile && appState.notebooks.length > 0) {
+  //       console.log('📱 Home screen focused - checking reviews for session')
+  //       checkAllNotebookReviews()
+  //       setHasCheckedThisSession(true)
+  //     }
+  //   }, [hasCheckedThisSession, profile, appState.notebooks.length, checkAllNotebookReviews])
+  // )
+  
+  // DISABLED: Strategic trigger 2 - was causing performance issues
+  // useEffect(() => {
+  //   const dayChangeCallback = () => {
+  //     console.log('📅 Day changed - checking reviews')
+  //     checkAllNotebookReviews()
+  //   }
+  //   
+  //   registerDayChangeCallback(dayChangeCallback)
+  // }, [registerDayChangeCallback, checkAllNotebookReviews])
+  
+  // DISABLED: Manual trigger - was causing performance issues
+  const refreshReviewStatus = useCallback(() => {
+    console.log('🚫 Manual review status refresh DISABLED for performance')
+    // Disabled - was causing excessive database calls
+    return
+  }, [])
   
   // Removed unused bronzeNotebook variable
 
