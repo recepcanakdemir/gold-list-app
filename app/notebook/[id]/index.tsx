@@ -454,26 +454,7 @@ export default function NotebookDetailsScreen() {
   }
 
   const handleActionPress = (page: PageData) => {
-    // For Silver/Gold notebooks, only allow review actions
-    const notebookLevel = notebook?.notebook_level || 'bronze'
-    
-    if (notebookLevel === 'silver' || notebookLevel === 'gold') {
-      // Silver/Gold notebooks are review-only
-      if (page.type === 'review') {
-        router.push(`/notebook/${id}/review?page=${page.pageNumber}`)
-      } else {
-        // Show alert for non-review actions in Silver/Gold
-        Alert.alert(
-          `${notebookLevel === 'silver' ? 'Silver' : 'Gold'} Notebook`,
-          `This is a ${notebookLevel} notebook. You can only review words here. New words come from ${notebookLevel === 'silver' ? 'Bronze' : 'Silver'} notebook failures.`,
-          [{ text: 'OK' }]
-        )
-      }
-      setSelectedPage(null)
-      return
-    }
-    
-    // Bronze notebook logic (original behavior)
+    // All user-created notebooks are Bronze level
     // Check if this is a virtual page and handle accordingly
     if (page.id.startsWith('virtual-')) {
       // For virtual pages, redirect to input to create the actual page
@@ -616,29 +597,7 @@ export default function NotebookDetailsScreen() {
               </Text>
               <Text style={styles.speechBubbleDescription}>
                 {(() => {
-                  const notebookLevel = notebook?.notebook_level || 'bronze'
-                  
-                  // Silver/Gold notebook messaging
-                  if (notebookLevel === 'silver' || notebookLevel === 'gold') {
-                    const sourceLevel = notebookLevel === 'silver' ? 'Bronze' : 'Silver'
-                    const currentLevel = notebookLevel === 'silver' ? 'Silver' : 'Gold'
-                    
-                    if (page.type === 'review') {
-                      return autoFocusedPageNumber === page.pageNumber ? 
-                        `✨ Review all 20 ${currentLevel} words as a page!` :
-                        `Page ${page.pageNumber}: ${page.actualWordsCount} ${currentLevel} words ready for review`
-                    } else if (page.allWordsMastered) {
-                      return `Page ${page.pageNumber}: All 20 words mastered! 🎉`
-                    } else if (page.completedWords > 0 || page.actualWordsCount > 0) {
-                      const nextReviewInfo = page.daysUntilNextReview ? 
-                        ` • Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` : ''
-                      return `Page ${page.pageNumber}: ${page.actualWordsCount} ${currentLevel} words${nextReviewInfo}`
-                    } else {
-                      return `Page ${page.pageNumber}: Waiting for ${sourceLevel} Round 4 failures (need 20 words)`
-                    }
-                  }
-                  
-                  // Bronze notebook messaging (original logic)
+                  // All notebooks are Bronze level
                   return autoFocusedPageNumber === page.pageNumber ? 
                     // Special messaging for auto-focused pages
                     (page.type === 'review' ? 
@@ -694,32 +653,7 @@ export default function NotebookDetailsScreen() {
                   )
                 }
                 
-                // Silver/Gold notebook logic
-                if (notebookLevel === 'silver' || notebookLevel === 'gold') {
-                  if (page.type === 'review') {
-                    return (
-                      <TouchableOpacity 
-                        style={styles.actionButton}
-                        onPress={() => handleActionPress(page)}
-                      >
-                        <Text style={styles.actionButtonText}>
-                          Review {notebookLevel === 'silver' ? 'Silver' : 'Gold'} Words
-                        </Text>
-                      </TouchableOpacity>
-                    )
-                  } else {
-                    // Non-review pages in Silver/Gold show disabled state
-                    return (
-                      <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
-                        <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
-                          {notebookLevel === 'silver' ? 'Silver' : 'Gold'} Review Only
-                        </Text>
-                      </View>
-                    )
-                  }
-                }
-                
-                // Bronze notebook logic (original behavior)
+                // All notebooks are Bronze level
                 if ((page.completedWords > 0 || page.actualWordsCount > 0) && page.type !== 'review') {
                   return (
                     <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
@@ -784,63 +718,33 @@ export default function NotebookDetailsScreen() {
     )
   }
 
+  const handleMenuPress = () => {
+    router.push({
+      pathname: '/modal/notebook-menu',
+      params: { 
+        id: notebook.id,
+        title: notebook.title 
+      }
+    })
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Shared Header */}
-      <SharedHeader title={notebook.title} showBackButton={true} />
+      <SharedHeader 
+        title={notebook.title} 
+        showBackButton={true} 
+        showMenuButton={true}
+        onMenuPress={handleMenuPress}
+      />
       
-      {/* Notebook Language Info and Level Badge */}
+      {/* Notebook Language Info */}
       <View style={styles.languageHeader}>
         <Text style={styles.languageFlag}>{FLAG_EMOJIS[notebook.language_code as keyof typeof FLAG_EMOJIS] || '🌍'}</Text>
         <Text style={styles.languageText}>{notebook.language}</Text>
-        {(notebook.notebook_level === 'silver' || notebook.notebook_level === 'gold') && (
-          <View style={[
-            styles.levelBadge,
-            { backgroundColor: notebook.notebook_level === 'silver' ? colors.info + '20' : colors.warning + '20' }
-          ]}>
-            <Text style={[
-              styles.levelBadgeText,
-              { color: notebook.notebook_level === 'silver' ? colors.info : colors.warning }
-            ]}>
-              {notebook.notebook_level === 'silver' ? '🥈 SILVER' : '🥇 GOLD'} NOTEBOOK
-            </Text>
-          </View>
-        )}
       </View>
 
 
-      {/* Page-based Progress Summary for Silver/Gold */}
-      {(notebook.notebook_level === 'silver' || notebook.notebook_level === 'gold') && (
-        <View style={styles.pageProgressSummary}>
-          <Text style={styles.pageProgressTitle}>
-            {notebook.notebook_level === 'silver' ? 'Silver' : 'Gold'} Notebook Progress
-          </Text>
-          <Text style={styles.pageProgressSubtitle}>
-            Page-based reviews • 20 words per page
-          </Text>
-          
-          <View style={styles.pageProgressStats}>
-            <View style={styles.pageProgressStat}>
-              <Text style={styles.pageProgressStatValue}>
-                {pathData.filter(p => p.actualWordsCount > 0).length}
-              </Text>
-              <Text style={styles.pageProgressStatLabel}>Active Pages</Text>
-            </View>
-            <View style={styles.pageProgressStat}>
-              <Text style={styles.pageProgressStatValue}>
-                {pathData.filter(p => p.type === 'review').length}
-              </Text>
-              <Text style={styles.pageProgressStatLabel}>Reviews Due</Text>
-            </View>
-            <View style={styles.pageProgressStat}>
-              <Text style={styles.pageProgressStatValue}>
-                {pathData.filter(p => p.allWordsMastered).length}
-              </Text>
-              <Text style={styles.pageProgressStatLabel}>Completed</Text>
-            </View>
-          </View>
-        </View>
-      )}
 
       {/* Learning Path */}
       <ScrollView ref={scrollViewRef} style={styles.scrollView} contentContainerStyle={styles.pathContainer}>

@@ -78,7 +78,7 @@ export default function SettingsModal() {
             <View style={styles.profileInfo}>
               <Text style={styles.profileEmail}>{profile?.email}</Text>
               <Text style={styles.profileStatus}>
-                {profile?.subscription_status === 'free' ? 'Free Plan' : 'Premium Plan'}
+                Gold List Method
               </Text>
             </View>
             <View style={styles.profileStats}>
@@ -88,17 +88,6 @@ export default function SettingsModal() {
             </View>
           </View>
 
-          {profile?.subscription_status === 'free' && (
-            <TouchableOpacity 
-              style={styles.upgradeButton}
-              onPress={() => router.push('/modal/paywall')}
-            >
-              <Text style={styles.upgradeButtonText}>Upgrade to Premium</Text>
-              <Text style={styles.upgradeButtonSubtext}>
-                Unlock advanced analytics and unlimited notebooks
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
 
         {/* Learning Settings */}

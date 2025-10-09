@@ -166,11 +166,42 @@ export interface DailyProgress {
 class SupabaseService {
   private reviewCallTracker = new Map<string, number>()
   private pendingCalls = new Map<string, Promise<any>>()
+  
+  // Authentication caching to reduce network calls
+  private cachedUser: any = null
+  private userCacheExpiry: number = 0
+  private readonly USER_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
+  // Cached authentication - replaces 12 redundant getUser() calls
+  private async getCachedUser(): Promise<any> {
+    // Return cached user if still valid
+    if (this.cachedUser && Date.now() < this.userCacheExpiry) {
+      return this.cachedUser
+    }
+    
+    // Refresh cache with new auth check
+    const { data: { user }, error } = await supabase.auth.getUser()
+    if (error) throw error
+    if (!user) throw new Error('Not authenticated')
+    
+    // Cache the result
+    this.cachedUser = user
+    this.userCacheExpiry = Date.now() + this.USER_CACHE_TTL
+    console.log('🔐 User authentication cached for 5 minutes')
+    
+    return user
+  }
+  
+  // Clear auth cache (call when user logs out or auth changes)
+  clearAuthCache(): void {
+    this.cachedUser = null
+    this.userCacheExpiry = 0
+    console.log('🗑️ Authentication cache cleared')
+  }
 
   // Create a new notebook
   async createNotebook(data: { title: string; language: string; language_code: string; words_per_day: number }): Promise<Notebook | null> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
+    const user = await this.getCachedUser()
 
     console.log('📝 Creating notebook without bulk pages...')
     
@@ -234,8 +265,11 @@ class SupabaseService {
     
     this.reviewCallTracker.set(callKey, now)
     
-    // Create and store the pending promise
-    const promise = this._performGetTodaysPage(notebookId)
+    // PERFORMANCE: Add retry logic to critical operation
+    const promise = withRetry(
+      () => this._performGetTodaysPage(notebookId),
+      `getTodaysPage(${notebookId.slice(0, 8)})`
+    )
     this.pendingCalls.set(callKey, promise)
     
     try {
@@ -248,8 +282,7 @@ class SupabaseService {
   }
   
   private async _performGetTodaysPage(notebookId: string): Promise<PageWithWords | null> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
+    const user = await this.getCachedUser()
 
     // Get notebook to find creation date and calculate current day
     const { data: notebook, error: notebookError } = await supabase
@@ -283,8 +316,6 @@ class SupabaseService {
 
     // If page doesn't exist, create it
     if (pageError?.code === 'PGRST116' || !existingPage) {
-      console.log(`🔧 Creating page ${todaysPageNumber}...`)
-      
       const { data: newPage, error: createError } = await supabase
         .from('pages')
         .insert({
@@ -305,20 +336,45 @@ class SupabaseService {
         `)
         .single()
 
-      if (createError) throw createError
-      if (!newPage) return null
+      // Handle race condition: if page was created by another concurrent call
+      if (createError?.code === '23505') { // Unique constraint violation
+        console.log(`🔄 Page ${todaysPageNumber} was created by another process - fetching existing page`)
+        
+        // Fetch the page that was created by the other process
+        const { data: existingPageAfterRace, error: fetchError } = await supabase
+          .from('pages')
+          .select(`
+            *,
+            words!words_page_id_fkey (*)
+          `)
+          .eq('notebook_id', notebookId)
+          .eq('page_number', todaysPageNumber)
+          .single()
 
-      console.log(`✅ Page ${todaysPageNumber} created successfully`)
-      console.log(`✅ Returning page ${todaysPageNumber} with ${newPage.words?.length || 0} words`)
+        if (fetchError) {
+          console.error(`❌ Failed to fetch page after race condition:`, fetchError)
+          throw fetchError
+        }
+
+        return {
+          ...existingPageAfterRace,
+          notebook
+        } as PageWithWords
+      }
+
+      // Handle other creation errors
+      if (createError) {
+        console.error(`❌ Failed to create page ${todaysPageNumber}:`, createError)
+        throw createError
+      }
+      
+      if (!newPage) return null
       
       return {
         ...newPage,
         notebook
       } as PageWithWords
     }
-
-    console.log(`📄 Page ${todaysPageNumber} already exists`)
-    console.log(`✅ Returning page ${todaysPageNumber} with ${existingPage.words?.length || 0} words`)
     
     return {
       ...existingPage,
@@ -348,8 +404,7 @@ class SupabaseService {
 
   // Rest of the methods remain the same...
   async getNotebooks(): Promise<Notebook[]> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
+    const user = await this.getCachedUser()
 
     const { data, error } = await supabase
       .from('notebooks')
@@ -363,75 +418,43 @@ class SupabaseService {
   }
 
   async addWords(pageId: string, words: CreateWordData[]): Promise<{ success: boolean }> {
-    if (!words || words.length === 0) {
-      throw new Error('No words provided')
-    }
+    return withRetry(async () => {
+      if (!words || words.length === 0) {
+        throw new Error('No words provided')
+      }
 
-    console.log(`💾 Adding ${words.length} words to page: ${pageId}`)
-    
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
-
-    console.log('📄 Getting page details...')
-    
-    // Get page details first
-    const { data: page, error: pageError } = await supabase
-      .from('pages')
-      .select('*')
-      .eq('id', pageId)
-      .single()
-
-    if (pageError) throw pageError
-    if (!page) throw new Error('Page not found')
-
-    console.log('🔄 Preparing word data for insertion...')
-
-    // Prepare words for insertion
-    const wordsToInsert = words.map((word, index) => ({
-      notebook_id: page.notebook_id,
-      page_id: pageId,
-      word: word.word,
-      translation: word.translation,
-      meaning: word.meaning || word.translation,
-      notes: word.notes || null,
-      example_sentence: word.example_sentence || null,
-      word_type: word.word_type || 'unknown',
-      position_in_page: word.position_in_page,
-      current_round: 1 as 1,  // Cast to round_number enum type
-      is_mastered: false,
-      review_date: (() => {
-        const currentDate = new Date(getCurrentDate())
-        currentDate.setHours(0, 0, 0, 0)
-        const reviewDate = new Date(currentDate.getTime() + 13 * 24 * 60 * 60 * 1000)
-        
-        // Use local date formatting to avoid timezone issues
-        const year = reviewDate.getFullYear()
-        const month = String(reviewDate.getMonth() + 1).padStart(2, '0')
-        const day = String(reviewDate.getDate()).padStart(2, '0')
-        const reviewDateStr = `${year}-${month}-${day}`
-        
-        console.log(`🗓️ TIMING DEBUG - Word created on ${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}, review_date set to ${reviewDateStr} (added 13 days for Day 15 review)`)
-        return reviewDateStr
-      })(),
-      times_reviewed: 0,
-      status: 'learning',
-      // Lineage tracking for Silver/Gold progression
-      source_notebook_id: page.notebook_id, // Track original Bronze notebook
-      original_page_id: pageId // Track original Bronze page
-    }))
-
-    console.log('⚡ Executing 3 operations in parallel: words insert, page update, profile query...')
-
-    // Execute all operations in parallel
-    const [wordsResult, pageUpdateResult, profileUpdateResult] = await Promise.allSettled([
-      // Insert words
-      supabase.from('words').insert(wordsToInsert),
+      console.log(`💾 Adding ${words.length} words to page: ${pageId}`)
       
-      // Update page with word count and completion info
-      supabase.from('pages').update({
-        words_count: words.length,
-        is_completed: false,
-        next_review_date: (() => {
+      const user = await this.getCachedUser()
+
+      console.log('📄 Getting page details...')
+      
+      // Get page details first
+      const { data: page, error: pageError } = await supabase
+        .from('pages')
+        .select('*')
+        .eq('id', pageId)
+        .single()
+
+      if (pageError) throw pageError
+      if (!page) throw new Error('Page not found')
+
+      console.log('🔄 Preparing word data for insertion...')
+
+      // Prepare words for insertion
+      const wordsToInsert = words.map((word, index) => ({
+        notebook_id: page.notebook_id,
+        page_id: pageId,
+        word: word.word,
+        translation: word.translation,
+        meaning: word.meaning || word.translation,
+        notes: word.notes || null,
+        example_sentence: word.example_sentence || null,
+        word_type: word.word_type || 'unknown',
+        position_in_page: word.position_in_page,
+        current_round: 1 as 1,  // Cast to round_number enum type
+        is_mastered: false,
+        review_date: (() => {
           const currentDate = new Date(getCurrentDate())
           currentDate.setHours(0, 0, 0, 0)
           const reviewDate = new Date(currentDate.getTime() + 13 * 24 * 60 * 60 * 1000)
@@ -440,37 +463,70 @@ class SupabaseService {
           const year = reviewDate.getFullYear()
           const month = String(reviewDate.getMonth() + 1).padStart(2, '0')
           const day = String(reviewDate.getDate()).padStart(2, '0')
-          return `${year}-${month}-${day}`
-        })()
-      }).eq('id', pageId),
-      
-      // Get current profile for stats update
-      supabase.from('user_profiles').select('*').eq('user_id', user.id).single()
-    ])
+          const reviewDateStr = `${year}-${month}-${day}`
+          
+          console.log(`🗓️ TIMING DEBUG - Word created on ${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}, review_date set to ${reviewDateStr} (added 13 days for Day 15 review)`)
+          return reviewDateStr
+        })(),
+        times_reviewed: 0,
+        status: 'learning',
+        // Lineage tracking for Silver/Gold progression
+        source_notebook_id: page.notebook_id, // Track original Bronze notebook
+        original_page_id: pageId // Track original Bronze page
+      }))
 
-    // Check words insert result
-    if (wordsResult.status === 'rejected') {
-      throw wordsResult.reason
-    }
+      console.log('⚡ Executing 3 operations in parallel: words insert, page update, profile query...')
 
-    // Check page update result
-    if (pageUpdateResult.status === 'rejected') {
-      console.warn('Failed to update page:', pageUpdateResult.reason)
-    }
+      // Execute all operations in parallel
+      const [wordsResult, pageUpdateResult, profileUpdateResult] = await Promise.allSettled([
+        // Insert words
+        supabase.from('words').insert(wordsToInsert),
+        
+        // Update page with word count and completion info
+        supabase.from('pages').update({
+          words_count: words.length,
+          is_completed: false,
+          next_review_date: (() => {
+            const currentDate = new Date(getCurrentDate())
+            currentDate.setHours(0, 0, 0, 0)
+            const reviewDate = new Date(currentDate.getTime() + 13 * 24 * 60 * 60 * 1000)
+            
+            // Use local date formatting to avoid timezone issues
+            const year = reviewDate.getFullYear()
+            const month = String(reviewDate.getMonth() + 1).padStart(2, '0')
+            const day = String(reviewDate.getDate()).padStart(2, '0')
+            return `${year}-${month}-${day}`
+          })()
+        }).eq('id', pageId),
+        
+        // Get current profile for stats update
+        supabase.from('user_profiles').select('*').eq('user_id', user.id).single()
+      ])
 
-    console.log('👤 Updating profile stats...')
+      // Check words insert result
+      if (wordsResult.status === 'rejected') {
+        throw wordsResult.reason
+      }
 
-    // Update profile stats
-    if (profileUpdateResult.status === 'fulfilled') {
-      const { data: currentProfile } = profileUpdateResult.value
-      await supabase.from('user_profiles').update({
-        total_words_added: (currentProfile?.total_words_added || 0) + words.length,
-        updated_at: new Date().toISOString()
-      }).eq('user_id', user.id)
-    }
+      // Check page update result
+      if (pageUpdateResult.status === 'rejected') {
+        console.warn('Failed to update page:', pageUpdateResult.reason)
+      }
 
-    console.log(`✅ Successfully added ${words.length} words`)
-    return { success: true }
+      console.log('👤 Updating profile stats...')
+
+      // Update profile stats
+      if (profileUpdateResult.status === 'fulfilled') {
+        const { data: currentProfile } = profileUpdateResult.value
+        await supabase.from('user_profiles').update({
+          total_words_added: (currentProfile?.total_words_added || 0) + words.length,
+          updated_at: new Date().toISOString()
+        }).eq('user_id', user.id)
+      }
+
+      console.log(`✅ Successfully added ${words.length} words`)
+      return { success: true }
+    }, `addWords(${pageId.slice(0, 8)}, ${words.length} words)`)
   }
 
   // Additional methods that are being called
@@ -483,6 +539,91 @@ class SupabaseService {
 
     if (error) throw error
     return data
+  }
+
+  // Update notebook title
+  async updateNotebookTitle(notebookId: string, newTitle: string): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase
+        .from('notebooks')
+        .update({ 
+          title: newTitle,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', notebookId)
+
+      if (error) throw error
+      
+      // Clear cache to ensure fresh data on next load
+      this.clearCache()
+    }, 'updateNotebookTitle')
+  }
+
+  // Delete notebook and all related data
+  async deleteNotebook(notebookId: string): Promise<void> {
+    return withRetry(async () => {
+      // Delete in correct order to maintain referential integrity
+      // Reviews -> Words -> Pages -> Notebook
+      
+      // First, get all pages for this notebook
+      const { data: pages, error: pagesError } = await supabase
+        .from('pages')
+        .select('id')
+        .eq('notebook_id', notebookId)
+
+      if (pagesError) throw pagesError
+
+      if (pages && pages.length > 0) {
+        const pageIds = pages.map(page => page.id)
+
+        // Get all words for these pages
+        const { data: words, error: wordsError } = await supabase
+          .from('words')
+          .select('id')
+          .in('page_id', pageIds)
+
+        if (wordsError) throw wordsError
+
+        if (words && words.length > 0) {
+          const wordIds = words.map(word => word.id)
+
+          // Delete all reviews for these words
+          const { error: reviewsError } = await supabase
+            .from('reviews')
+            .delete()
+            .in('word_id', wordIds)
+
+          if (reviewsError) throw reviewsError
+
+          // Delete all words
+          const { error: deleteWordsError } = await supabase
+            .from('words')
+            .delete()
+            .in('page_id', pageIds)
+
+          if (deleteWordsError) throw deleteWordsError
+        }
+
+        // Delete all pages
+        const { error: deletePagesError } = await supabase
+          .from('pages')
+          .delete()
+          .eq('notebook_id', notebookId)
+
+        if (deletePagesError) throw deletePagesError
+      }
+
+      // Finally, delete the notebook
+      const { error: deleteNotebookError } = await supabase
+        .from('notebooks')
+        .delete()
+        .eq('id', notebookId)
+
+      if (deleteNotebookError) throw deleteNotebookError
+      
+      // Clear cache to ensure fresh data on next load
+      this.clearCache()
+    }, 'deleteNotebook')
   }
 
   async getPages(notebookId: string): Promise<PageWithWords[]> {
@@ -700,108 +841,113 @@ class SupabaseService {
   }
 
   async hasWordsForReviewTodayForNotebook(notebookId: string): Promise<{ hasReviews: boolean; pageNumber?: number }> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
+    return withRetry(async () => {
+      const user = await this.getCachedUser()
 
-    const currentDate = getCurrentDate()
-    const reviewDate = new Date(currentDate)
-    reviewDate.setHours(0, 0, 0, 0)
+      const currentDate = getCurrentDate()
+      const reviewDate = new Date(currentDate)
+      reviewDate.setHours(0, 0, 0, 0)
 
-    const { data: reviewableWords, error } = await supabase
-      .from('words')
-      .select(`
-        id,
-        page:pages!words_page_id_fkey(
+      const { data: reviewableWords, error } = await supabase
+        .from('words')
+        .select(`
           id,
-          page_number,
-          notebook_id,
-          created_at
-        )
-      `)
-      .eq('page.notebook_id', notebookId)
-      .eq('is_mastered', false)
-      .not('review_date', 'is', null)
-      .lte('review_date', reviewDate.toISOString())
+          review_date,
+          is_mastered,
+          word,
+          page:pages!words_page_id_fkey(
+            id,
+            page_number,
+            notebook_id,
+            created_at
+          )
+        `)
+        .eq('notebook_id', notebookId)
+        .eq('is_mastered', false)
+        .not('review_date', 'is', null)
+        .lte('review_date', reviewDate.toISOString())
 
-    if (error) {
-      console.error('Error checking words for review:', error)
-      throw error
-    }
+      if (error) {
+        console.error(`Error checking words for review (${notebookId.slice(0, 8)}):`, error)
+        throw error
+      }
 
-    if (!reviewableWords || reviewableWords.length === 0) {
-      return { hasReviews: false }
-    }
+      if (!reviewableWords || reviewableWords.length === 0) {
+        return { hasReviews: false }
+      }
 
-    const firstWord = reviewableWords[0]
-    const page = firstWord.page as any
-    
-    // Defensive check for null page data
-    if (!page) {
-      console.warn(`Word ${firstWord.id} has null page data - skipping review check for notebook ${notebookId}`)
-      return { hasReviews: false }
-    }
-    
-    return { 
-      hasReviews: true,
-      pageNumber: page.page_number
-    }
+      const firstWord = reviewableWords[0]
+      const page = firstWord.page as any
+      
+      // Defensive check for null page data
+      if (!page) {
+        console.warn(`Word ${firstWord.id} has null page data - skipping review check for notebook ${notebookId.slice(0, 8)}`)
+        return { hasReviews: false }
+      }
+      
+      return { 
+        hasReviews: true,
+        pageNumber: page.page_number
+      }
+    }, `hasWordsForReviewTodayForNotebook(${notebookId.slice(0, 8)})`)
   }
 
   async getWordsForReview(notebookId: string): Promise<WordWithReviews[]> {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not authenticated')
+    return withRetry(async () => {
+      const user = await this.getCachedUser()
 
-    // Get all words from the notebook with page data including context
-    const { data: wordsData, error } = await supabase
-      .from('words')
-      .select(`
-        *,
-        page:pages!page_id(
-          id,
-          page_number,
-          notebook_id,
-          context_title,
-          context_source,
-          context_description,
-          context_theme
+      // Get all words from the notebook with page data including context
+      const { data: wordsData, error } = await supabase
+        .from('words')
+        .select(`
+          *,
+          page:pages!page_id(
+            id,
+            page_number,
+            notebook_id,
+            context_title,
+            context_source,
+            context_description,
+            context_theme
+          )
+        `)
+        .eq('notebook_id', notebookId)
+
+      if (error) throw error
+      if (!wordsData) return []
+
+      const notebookWords = wordsData
+
+      // Transform to WordWithReviews format
+      return notebookWords.map(word => {
+        const currentDate = getCurrentDate()
+        currentDate.setHours(0, 0, 0, 0)
+        
+        let daysSinceCreated: number
+        let daysUntilReview: number
+        
+        const wordCreated = new Date(word.created_at)
+        wordCreated.setHours(0, 0, 0, 0)
+        daysSinceCreated = Math.floor(
+          (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
         )
-      `)
-      .eq('notebook_id', notebookId)
+        daysUntilReview = 0 // Already filtered by database function
 
-    if (error) throw error
-    if (!wordsData) return []
-
-    const notebookWords = wordsData
-
-    // Transform to WordWithReviews format
-    return notebookWords.map(word => {
-      const currentDate = getCurrentDate()
-      currentDate.setHours(0, 0, 0, 0)
-      
-      let daysSinceCreated: number
-      let daysUntilReview: number
-      
-      const wordCreated = new Date(word.created_at)
-      wordCreated.setHours(0, 0, 0, 0)
-      daysSinceCreated = Math.floor(
-        (currentDate.getTime() - wordCreated.getTime()) / (24 * 60 * 60 * 1000)
-      )
-      daysUntilReview = 0 // Already filtered by database function
-
-      return {
-        ...word,
-        // Add required properties for WordWithReviews interface
-        reviews: [],
-        page: { id: word.page_id || null } as any,
-        nextReviewDate: null,
-        daysSinceCreated,
-        isReadyForReview: true, // Note: property name should be isReadyForReview, not isReviewable
-        // Legacy badge properties (kept for compatibility)
-        badge_type: word.badge_type || null,
-        review_type: word.review_type || 'word',
-        notebook_level: word.notebook_level || 'bronze'
-      }
-    })
+        return {
+          ...word,
+          // Add required properties for WordWithReviews interface
+          reviews: [],
+          page: { id: word.page_id || null } as any,
+          nextReviewDate: null,
+          daysSinceCreated,
+          isReadyForReview: true, // Note: property name should be isReadyForReview, not isReviewable
+          // Legacy badge properties (kept for compatibility)
+          badge_type: word.badge_type || null,
+          review_type: word.review_type || 'word',
+          notebook_level: word.notebook_level || 'bronze'
+        }
+      })
+    }, `getWordsForReview(${notebookId.slice(0, 8)})`)
   }
 
   async processWordReview(
@@ -1337,7 +1483,96 @@ class SupabaseService {
     return 0
   }
 
-  clearReviewCallTracker() {
+  // PERFORMANCE: Batch review checking for multiple notebooks
+  async hasWordsForReviewTodayBatch(notebookIds: string[]): Promise<Map<string, { hasReviews: boolean; pageNumber?: number }>> {
+    if (notebookIds.length === 0) {
+      return new Map()
+    }
+    
+    return withRetry(async () => {
+      const user = await this.getCachedUser()
+      const currentDate = getCurrentDate()
+      const reviewDate = new Date(currentDate)
+      reviewDate.setHours(0, 0, 0, 0)
+
+      console.log(`🚀 Batch checking reviews for ${notebookIds.length} notebooks...`)
+      const startTime = Date.now()
+
+      // Single query to get reviewable words for ALL notebooks at once
+      const { data: reviewableWords, error } = await supabase
+      .from('words')
+      .select(`
+        id,
+        notebook_id,
+        review_date,
+        is_mastered,
+        word,
+        page:pages!words_page_id_fkey(
+          id,
+          page_number,
+          notebook_id,
+          created_at
+        )
+      `)
+      .in('notebook_id', notebookIds)
+      .eq('is_mastered', false)
+      .not('review_date', 'is', null)
+      .lte('review_date', reviewDate.toISOString())
+
+    if (error) {
+      console.error('Error in batch review check:', error)
+      // Fallback to individual checks
+      const results = new Map<string, { hasReviews: boolean; pageNumber?: number }>()
+      for (const notebookId of notebookIds) {
+        try {
+          const result = await this.hasWordsForReviewTodayForNotebook(notebookId)
+          results.set(notebookId, result)
+        } catch (err) {
+          results.set(notebookId, { hasReviews: false })
+        }
+      }
+      return results
+    }
+
+    // Group results by notebook
+    const resultMap = new Map<string, { hasReviews: boolean; pageNumber?: number }>()
+    
+    // Initialize all notebooks with no reviews
+    notebookIds.forEach(id => {
+      resultMap.set(id, { hasReviews: false })
+    })
+
+    // Process reviewable words and group by notebook
+    const notebookWordsMap = new Map<string, any[]>()
+    reviewableWords?.forEach(word => {
+      if (!notebookWordsMap.has(word.notebook_id)) {
+        notebookWordsMap.set(word.notebook_id, [])
+      }
+      notebookWordsMap.get(word.notebook_id)!.push(word)
+    })
+
+    // Set results for notebooks that have reviews
+    notebookWordsMap.forEach((words, notebookId) => {
+      if (words.length > 0) {
+        // Find the page number of the first reviewable word
+        const firstWord = words[0]
+        const pageNumber = firstWord.page?.page_number
+        
+        resultMap.set(notebookId, {
+          hasReviews: true,
+          pageNumber: pageNumber
+        })
+      }
+    })
+
+    const batchTime = Date.now() - startTime
+    console.log(`✅ Batch review check completed in ${batchTime}ms for ${notebookIds.length} notebooks (${reviewableWords?.length || 0} reviewable words found)`)
+
+    return resultMap
+    }, `hasWordsForReviewTodayBatch(${notebookIds.length} notebooks)`)
+  }
+
+  async clearReviewCallTracker() {
     this.reviewCallTracker.clear()
     this.pendingCalls.clear()
   }

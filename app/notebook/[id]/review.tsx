@@ -1,5 +1,6 @@
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useApp } from '@/lib/contexts/AppContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { ROUND_COLORS } from '@/lib/types/goldlist'
 import { getBadgeInfo, getBadgeType, getDisplayRound, getBadgeEmoji } from '@/lib/utils/badgeUtils'
@@ -32,6 +33,7 @@ export default function ReviewScreen() {
   const { id, round, page } = useLocalSearchParams<{ id: string; round?: string; page?: string }>()
   const { colors } = useTheme()
   const { getCurrentDate } = useDevTime()
+  const { updateNotebookLastUsed } = useApp()
   
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [words, setWords] = useState<WordWithReviews[]>([])
@@ -127,8 +129,8 @@ export default function ReviewScreen() {
 
   const loadReviewData = async () => {
     try {
-      // Check if we're in unified review mode (page parameter is null or 'unified')
-      const isUnifiedReview = !page || page === 'unified'
+      // NEW BEHAVIOR: Always use notebook-specific review unless explicitly unified
+      const isUnifiedReview = page === 'unified'
       
       let notebookData, loadedWords
       
@@ -145,12 +147,8 @@ export default function ReviewScreen() {
         
         console.log(`🎯 Unified review loaded: ${loadedWords.length} words from ${new Set(loadedWords.map(w => (w.page as any).page_number)).size} pages`)
       } else {
-        // Traditional page-specific review mode
-        const options: { round?: number; pageNumber?: number } = {}
-        
-        // Add filters based on URL parameters
-        if (round) options.round = parseInt(round)
-        if (page) options.pageNumber = parseInt(page)
+        // Notebook-specific review mode (default behavior)
+        console.log(`📖 Loading notebook-specific review for notebook ${id}`)
         
         const results = await Promise.all([
           supabaseService.getNotebook(id!),
@@ -158,7 +156,21 @@ export default function ReviewScreen() {
         ])
         
         notebookData = results[0]
-        loadedWords = results[1]
+        const allNotebookWords = results[1]
+        
+        // Filter for words due today only (for notebook-specific reviews)
+        const today = getCurrentDate()
+        const todayString = today.toISOString().split('T')[0]
+        
+        loadedWords = allNotebookWords.filter(word => {
+          const wordReviewDate = word.review_date
+          const isDueToday = wordReviewDate === todayString
+          
+          console.log(`🔍 Word "${word.word}": reviewDate=${wordReviewDate}, today=${todayString}, isDue=${isDueToday}`)
+          return isDueToday && !word.is_mastered && word.status === 'learning'
+        })
+        
+        console.log(`📖 Notebook-specific review: ${loadedWords.length} words due today from notebook ${id} (filtered from ${allNotebookWords.length} total words)`)
       }
       
       setNotebook(notebookData)
@@ -574,6 +586,15 @@ export default function ReviewScreen() {
         console.log(`🚀 Reviews to process:`, reviewsToProcess.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
         await supabaseService.processBatchWordReviews(reviewsToProcess)
         console.log('✅ Batch processing completed successfully')
+        
+        // Immediately update review status without database refetch
+        if (typeof window !== 'undefined' && (window as any).onReviewsCompleted) {
+          (window as any).onReviewsCompleted()
+        }
+        
+        // Update notebook last used for smart ordering
+        updateNotebookLastUsed(id!)
+        
         setBatchReviews([]) // Clear the batch after successful processing
         batchReviewsRef.current = []
       } catch (error) {

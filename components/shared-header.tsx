@@ -8,9 +8,11 @@ import { useTheme } from '@/lib/contexts/ThemeContext'
 interface SharedHeaderProps {
   title: string
   showBackButton?: boolean
+  showMenuButton?: boolean
+  onMenuPress?: () => void
 }
 
-export function SharedHeader({ title, showBackButton = false }: SharedHeaderProps) {
+export function SharedHeader({ title, showBackButton = false, showMenuButton = false, onMenuPress }: SharedHeaderProps) {
   const router = useRouter()
   const { profile } = useAuth()
   const { colors } = useTheme()
@@ -47,6 +49,11 @@ export function SharedHeader({ title, showBackButton = false }: SharedHeaderProp
             <Text style={styles.notificationIconText}>🔔</Text>
           </View>
         </TouchableOpacity>
+        {showMenuButton && (
+          <TouchableOpacity style={styles.menuButton} onPress={onMenuPress}>
+            <Text style={styles.menuButtonText}>⋮</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   )
@@ -120,5 +127,23 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.lg,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.textPrimary,
+  },
+  menuButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuButtonText: {
+    fontSize: TYPOGRAPHY['2xl'],
+    color: colors.textPrimary,
+    fontWeight: TYPOGRAPHY.bold,
+    textAlign: 'center',
+    lineHeight: 0,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    marginTop: 4,
   },
 })

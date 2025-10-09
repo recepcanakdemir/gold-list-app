@@ -47,7 +47,7 @@ export default function WordInputScreen() {
   const router = useRouter()
   const { id, page: pageParam } = useLocalSearchParams<{ id: string; page?: string }>()
   const { colors } = useTheme()
-  const { refreshNotebooks } = useApp()
+  const { refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { currentSimulatedDay } = useDevTime()
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [mode, setMode] = useState<'focus' | 'fullpage'>('focus')
@@ -469,9 +469,17 @@ export default function WordInputScreen() {
       
       // Add words to the current page
       await supabaseService.addWords(currentPage.id, wordsToSave)
+      
+      // Immediately update progress without database refetch
+      if (typeof window !== 'undefined' && (window as any).onWordsAdded) {
+        (window as any).onWordsAdded(id!, wordsToSave.length)
+      }
 
-      // Refresh the app data to update profile stats
-      await refreshNotebooks()
+      // Update notebook last used for smart ordering
+      updateNotebookLastUsed(id!)
+
+      // PERFORMANCE: Skip profile refresh since addWords() already updated profile stats
+      await refreshNotebooks(true)
 
       Alert.alert(
         'Success!',

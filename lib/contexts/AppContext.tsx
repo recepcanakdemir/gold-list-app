@@ -6,8 +6,7 @@ import {
   GoldListSettings, 
   NotebookWithStats, 
   ReviewSession, 
-  InputSession,
-  OnboardingProgress 
+  InputSession
 } from '../types/goldlist'
 import { supabaseService } from '../services/supabaseService'
 
@@ -15,12 +14,10 @@ interface AppContextType {
   appState: AppState
   settings: GoldListSettings
   updateSettings: (settings: Partial<GoldListSettings>) => Promise<void>
-  refreshNotebooks: () => Promise<void>
+  refreshNotebooks: (skipProfileRefresh?: boolean) => Promise<void>
   setCurrentNotebook: (notebook: NotebookWithStats | null) => void
   startReviewSession: (notebookId: string) => Promise<void>
   startInputSession: (notebookId: string, mode: 'focus' | 'fullpage') => Promise<void>
-  updateOnboardingProgress: (progress: Partial<OnboardingProgress>) => Promise<void>
-  markOnboardingComplete: () => Promise<void>
   updateNotebookLastUsed: (notebookId: string) => Promise<void>
 }
 
@@ -41,15 +38,6 @@ const DEFAULT_SETTINGS: GoldListSettings = {
   enableHapticFeedback: true,
 }
 
-const DEFAULT_ONBOARDING: OnboardingProgress = {
-  currentStep: 0,
-  totalSteps: 8,
-  hasCompletedWelcome: false,
-  hasCompletedTutorial: false,
-  hasCreatedFirstNotebook: false,
-  hasAddedFirstWords: false,
-  hasCompletedFirstReview: false,
-}
 
 interface AppProviderProps {
   children: React.ReactNode
@@ -63,7 +51,6 @@ export function AppProvider({ children }: AppProviderProps) {
     currentNotebook: null,
     reviewSession: null,
     inputSession: null,
-    onboardingProgress: DEFAULT_ONBOARDING,
     settings: DEFAULT_SETTINGS,
     isOffline: false,
     lastSyncTime: null,
@@ -72,14 +59,15 @@ export function AppProvider({ children }: AppProviderProps) {
   // Load settings from AsyncStorage
   useEffect(() => {
     loadSettings()
-    loadOnboardingProgress()
   }, [])
 
   // Update user in app state when auth changes
   useEffect(() => {
+    if (__DEV__) console.log('🔄 AppContext: Profile changed, triggering refreshNotebooks')
     setAppState(prev => ({ ...prev, user: profile }))
     if (profile) {
-      refreshNotebooks()
+      // CRITICAL: Skip profile refresh when triggered by profile change to prevent infinite loop
+      refreshNotebooks(true) // Skip profile refresh since profile just changed
     }
   }, [profile])
 
@@ -95,17 +83,6 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }
 
-  const loadOnboardingProgress = async () => {
-    try {
-      const stored = await AsyncStorage.getItem('onboarding_progress')
-      if (stored) {
-        const progress = JSON.parse(stored)
-        setAppState(prev => ({ ...prev, onboardingProgress: { ...DEFAULT_ONBOARDING, ...progress } }))
-      }
-    } catch (error) {
-      console.error('Error loading onboarding progress:', error)
-    }
-  }
 
   const updateSettings = async (newSettings: Partial<GoldListSettings>) => {
     try {
@@ -117,28 +94,48 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }
 
-  const refreshNotebooks = useCallback(async () => {
+  const refreshNotebooks = useCallback(async (skipProfileRefresh = false) => {
     if (!user?.id) return
 
     try {
+      if (__DEV__) console.log('🔄 refreshNotebooks called, skipProfileRefresh:', skipProfileRefresh)
+      
       // Unlock today's pages first
       await supabaseService.unlockTodaysPages()
       
       // Then load notebooks
       const notebooks = await supabaseService.getNotebooks()
-      setAppState(prev => ({ 
-        ...prev, 
-        notebooks,
-        lastSyncTime: new Date()
-      }))
+      
+      // PERFORMANCE: Only update state if notebooks actually changed
+      setAppState(prev => {
+        // Check if notebooks are actually different
+        const notebooksChanged = JSON.stringify(prev.notebooks) !== JSON.stringify(notebooks)
+        if (!notebooksChanged && __DEV__) {
+          console.log('🔄 Notebooks data is identical, skipping state update')
+          return prev // Don't trigger state update if data is the same
+        }
+        
+        if (__DEV__ && notebooksChanged) {
+          console.log('🔄 Notebooks data changed, updating state')
+        }
+        
+        return { 
+          ...prev, 
+          notebooks,
+          lastSyncTime: new Date()
+        }
+      })
 
-      // Also refresh profile to get updated stats
-      await refreshProfile()
+      // PERFORMANCE: Skip profile refresh when it's redundant (e.g., after addWords)
+      if (!skipProfileRefresh) {
+        if (__DEV__) console.log('🔄 refreshNotebooks calling refreshProfile - this may trigger loop!')
+        await refreshProfile()
+      }
     } catch (error) {
       console.error('Error loading notebooks:', error)
       setAppState(prev => ({ ...prev, isOffline: true }))
     }
-  }, [user?.id])
+  }, [user?.id, refreshProfile])
 
   const setCurrentNotebook = (notebook: NotebookWithStats | null) => {
     setAppState(prev => ({ ...prev, currentNotebook: notebook }))
@@ -181,32 +178,53 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }
 
-  const updateOnboardingProgress = async (progress: Partial<OnboardingProgress>) => {
-    try {
-      const updatedProgress = { ...appState.onboardingProgress, ...progress }
-      await AsyncStorage.setItem('onboarding_progress', JSON.stringify(updatedProgress))
-      setAppState(prev => ({ ...prev, onboardingProgress: updatedProgress }))
-    } catch (error) {
-      console.error('Error updating onboarding progress:', error)
-    }
-  }
-
-  const markOnboardingComplete = async () => {
-    const completedProgress: OnboardingProgress = {
-      ...appState.onboardingProgress,
-      hasCompletedWelcome: true,
-      hasCompletedTutorial: true,
-      currentStep: DEFAULT_ONBOARDING.totalSteps,
-    }
-    await updateOnboardingProgress(completedProgress)
-  }
 
   const updateNotebookLastUsed = async (notebookId: string) => {
     try {
-      await supabaseService.updateNotebookLastUsed(notebookId)
-      // Optionally refresh notebooks to get updated order
-      // but don't await to avoid slowing down user interactions
-      refreshNotebooks()
+      if (__DEV__) console.log('🔄 updateNotebookLastUsed called for:', notebookId.slice(0, 8))
+      
+      // Optimistic UI update: immediately reorder notebooks locally
+      const currentTime = new Date().toISOString()
+      setAppState(prev => {
+        // Check if this notebook actually needs updating
+        const targetNotebook = prev.notebooks.find(n => n.id === notebookId)
+        if (!targetNotebook) {
+          if (__DEV__) console.log('🔄 updateNotebookLastUsed: Notebook not found, skipping update')
+          return prev
+        }
+        
+        // Check if the last_used_at would actually change (avoid updates if called rapidly)
+        const existingTime = targetNotebook.last_used_at || targetNotebook.created_at
+        const timeDiff = new Date(currentTime).getTime() - new Date(existingTime).getTime()
+        if (timeDiff < 1000) { // Less than 1 second difference
+          if (__DEV__) console.log('🔄 updateNotebookLastUsed: Time difference too small, skipping update')
+          return prev
+        }
+        
+        const updatedNotebooks = prev.notebooks.map(notebook => 
+          notebook.id === notebookId 
+            ? { ...notebook, last_used_at: currentTime, updated_at: currentTime }
+            : notebook
+        )
+        
+        // Sort by last_used_at to ensure the updated notebook appears first
+        const sortedNotebooks = updatedNotebooks.sort((a, b) => {
+          const aTime = new Date(a.last_used_at || a.created_at).getTime()
+          const bTime = new Date(b.last_used_at || b.created_at).getTime()
+          return bTime - aTime
+        })
+        
+        if (__DEV__) console.log('🔄 updateNotebookLastUsed: Creating NEW notebooks array - this is necessary for reordering')
+        return { ...prev, notebooks: sortedNotebooks }
+      })
+
+      // Update database in background (don't await to avoid slowing UI)
+      supabaseService.updateNotebookLastUsed(notebookId).catch(error => {
+        console.warn('Failed to update notebook last used in database:', error)
+        // In case of error, refresh from database to get correct state
+        // Skip profile refresh since this is just a notebook ordering issue
+        refreshNotebooks(true)
+      })
     } catch (error) {
       console.warn('Failed to update notebook last used:', error)
     }
@@ -220,8 +238,6 @@ export function AppProvider({ children }: AppProviderProps) {
     setCurrentNotebook,
     startReviewSession,
     startInputSession,
-    updateOnboardingProgress,
-    markOnboardingComplete,
     updateNotebookLastUsed,
   }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import { NotebookWithStats } from '@/lib/types/goldlist'
 // Removed unused badge imports
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import MaterialIcons from '@expo/vector-icons/MaterialIcons'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { SharedHeader } from '@/components/shared-header'
 import { DevTimeDisplay } from '@/components/DevTimeDisplay'
@@ -29,8 +30,8 @@ export default function HomeScreen() {
   const router = useRouter()
   const { profile } = useAuth()
   const { appState, refreshNotebooks, updateNotebookLastUsed } = useApp()
-  const { colors } = useTheme()
-  const { registerDayChangeCallback, currentSimulatedDay } = useDevTime()
+  const { colors, isDark } = useTheme()
+  const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
   const [refreshing, setRefreshing] = useState(false)
   const screenWidth = Dimensions.get('window').width
   const [currentCarouselPage, setCurrentCarouselPage] = useState(0)
@@ -43,6 +44,18 @@ export default function HomeScreen() {
     { day: 'Sat', words: 0, completed: false },
     { day: 'Sun', words: 0, completed: false },
   ])
+  // Throttling and loading guards - use refs to avoid dependency issues
+  const isLoadingProgressRef = useRef(false)
+  const lastProgressLoadTimeRef = useRef(0)
+  
+  // Per-notebook progress tracking instead of global
+  const [notebookProgressMap, setNotebookProgressMap] = useState<Map<string, {
+    wordsAdded: number
+    goal: number
+    completed: boolean
+  }>>(new Map())
+  
+  // Legacy global progress - will be derived from individual notebooks
   const [todayProgress, setTodayProgress] = useState({
     wordsAdded: 0,
     goal: 20,
@@ -63,8 +76,35 @@ export default function HomeScreen() {
   useEffect(() => {
     if (profile) {
       loadProgressData()
+      // Initialize button state from database when profile loads
+      updateButtonState('DAY_INIT')
     }
-  }, [profile]) // Only reload when profile changes
+  }, [profile, updateButtonState]) // Only reload when profile changes
+
+  // Better change detection: use notebook data fingerprint instead of just IDs
+  const notebookFingerprint = useMemo(() => {
+    // Create a fingerprint that includes meaningful data that would affect progress loading
+    // IMPORTANT: Exclude updated_at to prevent reordering from triggering unnecessary reloads
+    const fingerprint = appState.notebooks.map(notebook => ({
+      id: notebook.id,
+      words_per_day: notebook.words_per_day,
+      // Include words count for meaningful changes (when words are actually added)
+      words_count: notebook.words_count || 0,
+      // Only include created_at to detect truly new notebooks
+      created_at: notebook.created_at
+    })).sort((a, b) => a.id.localeCompare(b.id))
+    
+    return JSON.stringify(fingerprint)
+  }, [appState.notebooks])
+
+  // DISABLED: Notebook fingerprint loading replaced by event-driven system
+  // Only load progress on specific events (DAY_INIT, MANUAL_REFRESH, etc.)
+  // useEffect(() => {
+  //   if (profile && appState.notebooks.length > 0) {
+  //     if (__DEV__) console.log('📚 Notebooks ACTUALLY changed - loading progress for', appState.notebooks.length, 'notebooks')
+  //     loadNotebookProgress()
+  //   }
+  // }, [profile, notebookFingerprint, loadNotebookProgress])
 
   const loadProgressData = async () => {
     // Only load progress data if user is authenticated
@@ -80,10 +120,169 @@ export default function HomeScreen() {
       
       setWeekData(weekly)
       setTodayProgress(today)
+      
+      // Per-notebook progress now handled by event-driven system
+      // loadNotebookProgress is called through updateButtonState events
     } catch (error) {
       console.error('Error loading progress data:', error)
     }
   }
+
+  // Load progress for each notebook independently - PARALLEL LOADING for performance
+  const loadNotebookProgress = useCallback(async (notebooks?: NotebookWithStats[]) => {
+    // Use passed notebooks or current state, but don't depend on appState.notebooks in useCallback
+    const notebooksToLoad = notebooks || appState.notebooks
+    
+    if (notebooksToLoad.length === 0) {
+      setNotebookProgressMap(new Map())
+      return
+    }
+
+    // THROTTLING: Prevent rapid successive calls
+    const now = Date.now()
+    const timeSinceLastLoad = now - lastProgressLoadTimeRef.current
+    const THROTTLE_MS = 1000 // Only allow one call per second
+    
+    if (isLoadingProgressRef.current) {
+      if (__DEV__) console.log('⏸️ Progress loading already in progress, skipping duplicate call')
+      return
+    }
+    
+    if (timeSinceLastLoad < THROTTLE_MS) {
+      if (__DEV__) console.log(`⏳ Progress loading throttled, last call was ${timeSinceLastLoad}ms ago`)
+      return
+    }
+
+    isLoadingProgressRef.current = true
+    lastProgressLoadTimeRef.current = now
+    
+    try {
+      // Reduce log spam - only show every 5th call or important calls
+      const shouldLog = timeSinceLastLoad > 5000 || notebooksToLoad.length !== 2
+      if (shouldLog && __DEV__) {
+        console.log(`🚀 Loading progress for ${notebooksToLoad.length} notebooks in parallel...`)
+      }
+      const startTime = Date.now()
+      
+      const progressMap = new Map<string, { wordsAdded: number; goal: number; completed: boolean }>()
+      
+      // PERFORMANCE FIX: Load all notebooks in parallel instead of serially
+      const progressPromises = notebooksToLoad.map(async (notebook) => {
+      try {
+        // Get today's page for this notebook
+        const todaysPage = await supabaseService.getTodaysPage(notebook.id)
+        
+        if (todaysPage) {
+          // Count words added to today's page
+          const wordsAddedToday = todaysPage.words?.length || 0
+          const goal = notebook.words_per_day || 20
+          const completed = wordsAddedToday >= goal
+          
+          return {
+            notebookId: notebook.id,
+            progress: { wordsAdded: wordsAddedToday, goal, completed }
+          }
+        } else {
+          // No page available today (shouldn't happen in normal usage)
+          return {
+            notebookId: notebook.id,
+            progress: { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
+          }
+        }
+      } catch (error) {
+        console.error(`Error loading progress for notebook ${notebook.id.slice(0, 8)}:`, error)
+        return {
+          notebookId: notebook.id,
+          progress: { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
+        }
+      }
+    })
+    
+    // Wait for all progress loads to complete
+    const results = await Promise.all(progressPromises)
+    
+    // Build the progress map from results, but preserve recent local updates
+    results.forEach(({ notebookId, progress }) => {
+      progressMap.set(notebookId, progress)
+    })
+    
+      const loadTime = Date.now() - startTime
+      if (shouldLog && __DEV__) {
+        console.log(`✅ Parallel progress loading completed in ${loadTime}ms for ${notebooksToLoad.length} notebooks`)
+      }
+      
+      // Simple database load - no complex protection needed with event-driven system
+      setNotebookProgressMap(progressMap)
+    } catch (error) {
+      console.error('Error loading notebook progress:', error)
+    } finally {
+      isLoadingProgressRef.current = false // Always reset loading guard
+    }
+  }, [])
+
+  // Immediate state update functions - no database refetching needed
+  
+  // Single event-driven state manager for button state
+  const updateButtonState = useCallback((event: 'DAY_INIT' | 'WORDS_ADDED' | 'MANUAL_REFRESH' | 'DAY_ADVANCE', data?: any) => {
+    if (__DEV__) console.log(`🎯 Button State Event: ${event}`, data)
+    
+    switch (event) {
+      case 'DAY_INIT':
+        // Load initial state from database on app start or day change
+        loadNotebookProgress(data?.notebooks || appState.notebooks)
+        break;
+        
+      case 'WORDS_ADDED':
+        // Update local state immediately when words are added
+        const { notebookId, wordsAdded } = data
+        setNotebookProgressMap(prev => {
+          const newMap = new Map(prev)
+          const notebook = appState.notebooks.find(n => n.id === notebookId)
+          const goal = notebook?.words_per_day || 20
+          const currentProgress = newMap.get(notebookId) || { wordsAdded: 0, goal, completed: false }
+          const newWordsCount = currentProgress.wordsAdded + wordsAdded
+          const newProgress = {
+            wordsAdded: newWordsCount,
+            goal,
+            completed: newWordsCount >= goal
+          }
+          newMap.set(notebookId, newProgress)
+          if (__DEV__) console.log(`🎯 Local state updated: ${currentProgress.wordsAdded} → ${newWordsCount}/${goal}, completed: ${newProgress.completed}`)
+          return newMap
+        })
+        break;
+        
+      case 'MANUAL_REFRESH':
+        // Reload from database on manual refresh
+        loadNotebookProgress(appState.notebooks)
+        break;
+        
+      case 'DAY_ADVANCE':
+        // Reset state for new day
+        setNotebookProgressMap(new Map())
+        loadNotebookProgress(appState.notebooks)
+        break;
+    }
+  }, [appState.notebooks])
+  
+  // Called directly when words are added to a notebook
+  const onWordsAdded = useCallback((notebookId: string, wordsAdded: number) => {
+    updateButtonState('WORDS_ADDED', { notebookId, wordsAdded })
+  }, [updateButtonState])
+
+  // Called directly when review session is completed
+  const onReviewsCompleted = useCallback(() => {
+    // Update review status immediately
+    checkAllNotebookReviews()
+  }, [])
+
+  // Expose these functions globally for other components to use
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      ;(window as any).onWordsAdded = onWordsAdded
+      ;(window as any).onReviewsCompleted = onReviewsCompleted
+    }
+  }, [onWordsAdded, onReviewsCompleted])
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -92,6 +291,8 @@ export default function HomeScreen() {
       loadProgressData(),
       checkReviewsOnce() // Check reviews on manual refresh
     ])
+    // Refresh button state from database
+    updateButtonState('MANUAL_REFRESH')
     setRefreshing(false)
   }
 
@@ -159,41 +360,67 @@ export default function HomeScreen() {
     }
   }
 
-  // Simple review state - defaults to false
-  const [hasReviewsToday, setHasReviewsToday] = useState(false)
-  const [reviewNotebookId, setReviewNotebookId] = useState<string | undefined>()
-  const [reviewPageNumber, setReviewPageNumber] = useState<number | undefined>()
+  // Per-notebook review state - more accurate than global detection
+  const [notebookReviews, setNotebookReviews] = useState<Map<string, { hasReviews: boolean; pageNumber?: number }>>(new Map())
   
-  // PERFORMANCE FIX: Removed per-notebook review state that was causing excessive DB calls
-  // Using simple global review detection instead
+  // Legacy global review state - kept for backward compatibility during transition
+  const [hasReviewsToday, setHasReviewsToday] = useState(false)
+  const [, setReviewNotebookId] = useState<string | undefined>()
+  const [, setReviewPageNumber] = useState<number | undefined>()
   
   // Loading states for async operations
   const [isPracticeButtonLoading, setIsPracticeButtonLoading] = useState(false)
   const [isAddWordsButtonLoading, setIsAddWordsButtonLoading] = useState(false)
   const [isCreateNotebookLoading, setIsCreateNotebookLoading] = useState(false)
 
-  // Check for reviews only when explicitly needed
-  const checkReviewsOnce = async () => {
-    // Get stack trace to see where this is being called from
-    const stack = new Error().stack
-    console.log('🔍 REVIEW CHECK CALLED FROM:', stack?.split('\n')[2]?.trim() || 'unknown')
-    
-    if (!profile) {
+  // Check reviews for all notebooks - PARALLEL CHECKING for performance
+  const checkAllNotebookReviews = async () => {
+    if (!profile || appState.notebooks.length === 0) {
+      setNotebookReviews(new Map())
       setHasReviewsToday(false)
       return
     }
     
     try {
-      console.log('🔄 Checking for reviews (event-driven)...')
-      const reviewData = await supabaseService.hasWordsForReviewToday()
-      setHasReviewsToday(reviewData.hasReviews)
-      setReviewNotebookId(reviewData.notebookId)
-      setReviewPageNumber(reviewData.pageNumber)
-      console.log(`📅 Reviews available: ${reviewData.hasReviews}`, reviewData.hasReviews ? `(${reviewData.notebookId})` : '')
+      console.log(`🔄 Checking reviews for ${appState.notebooks.length} notebooks using batch query...`)
+      const startTime = Date.now()
+      
+      // PERFORMANCE: Use single batched query instead of N individual queries
+      const notebookIds = appState.notebooks.map(n => n.id)
+      const reviewMap = await supabaseService.hasWordsForReviewTodayBatch(notebookIds)
+      
+      // Convert Map to array format for backward compatibility
+      const results = Array.from(reviewMap.entries()).map(([notebookId, data]) => ({
+        notebookId,
+        hasReviews: data.hasReviews,
+        pageNumber: data.pageNumber
+      }))
+      
+      const loadTime = Date.now() - startTime
+      console.log(`✅ Batch review checking completed in ${loadTime}ms for ${appState.notebooks.length} notebooks`)
+      
+      setNotebookReviews(reviewMap)
+      
+      // Update legacy global state for backward compatibility
+      const hasAnyReviews = results.some(r => r.hasReviews)
+      const firstReviewNotebook = results.find(r => r.hasReviews)
+      
+      setHasReviewsToday(hasAnyReviews)
+      setReviewNotebookId(firstReviewNotebook?.notebookId)
+      setReviewPageNumber(firstReviewNotebook?.pageNumber)
+      
+      console.log(`📅 FINAL Review results:`, results.map(r => `${r.notebookId.slice(0, 8)}: ${r.hasReviews}`).join(', '))
+      console.log(`🎯 Global hasReviews: ${hasAnyReviews}, First review notebook: ${firstReviewNotebook?.notebookId?.slice(0, 8)}`)
     } catch (error) {
-      console.error('Error checking reviews:', error)
+      console.error('Error checking notebook reviews:', error)
+      setNotebookReviews(new Map())
       setHasReviewsToday(false)
     }
+  }
+
+  // Legacy function - now delegates to the improved multi-notebook version
+  const checkReviewsOnce = async () => {
+    await checkAllNotebookReviews()
   }
 
   // PERFORMANCE FIX: Removed per-notebook review checking function
@@ -223,84 +450,88 @@ export default function HomeScreen() {
   // Register callback for day changes
   useEffect(() => {
     const unregister = registerDayChangeCallback(() => {
-      console.log('📅 Day changed - checking for reviews')
+      console.log('📅 Day changed - checking for reviews and resetting progress')
       checkReviewsOnce()
+      // Reset all notebook progress for the new day
+      updateButtonState('DAY_ADVANCE')
     })
 
     return unregister // Cleanup callback when component unmounts
-  }, []) // Empty dependency array since registerDayChangeCallback is now stable
-
-  // Check for completed reviews and added words flags to update status
-  useEffect(() => {
-    const checkForUpdates = () => {
-      if (typeof window !== 'undefined') {
-        let shouldUpdate = false
-        
-        if ((window as any).reviewsJustCompleted) {
-          console.log('🎉 Reviews were just completed - updating status')
-          delete (window as any).reviewsJustCompleted
-          shouldUpdate = true
+  }, [checkReviewsOnce, updateButtonState])
+  
+  // Smart focus-based updates: Load progress when needed
+  const [hasLoadedProgress, setHasLoadedProgress] = useState(false)
+  const lastFocusTime = useRef(0)
+  
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now()
+      const timeSinceLastFocus = now - lastFocusTime.current
+      
+      if (profile) {
+        // Initial load
+        if (!hasLoadedProgress) {
+          if (__DEV__) console.log('📱 Initial focus - loading progress')
+          updateButtonState('DAY_INIT', { notebooks: appState.notebooks })
+          setHasLoadedProgress(true)
         }
-        
-        if ((window as any).wordsJustAdded) {
-          console.log('📝 Words were just added - updating progress')
-          delete (window as any).wordsJustAdded
-          shouldUpdate = true
-        }
-        
-        if (shouldUpdate) {
-          // Update both review status and today's progress
-          checkReviewsOnce()
-          loadProgressData()
+        // No automatic refresh on navigation - use event-driven updates only
+        else if (timeSinceLastFocus > 1000) {
+          if (__DEV__) console.log('📱 Returning to homepage - using existing local state (event-driven)')
         }
       }
-    }
-    
-    // Check periodically for the flags
-    const interval = setInterval(checkForUpdates, 500)
-    
-    return () => clearInterval(interval)
-  }, [])
+      
+      lastFocusTime.current = now
+    }, [profile, hasLoadedProgress, updateButtonState])
+  )
+
+  // Event-driven updates - no more polling!
+  // Progress and review updates will be triggered directly by actions
 
 
   const getNotebookStatus = (notebook: NotebookWithStats) => {
     if (appState.notebooks.length === 0) return { type: 'no_notebook', text: 'Create Your First Notebook' }
     
-    const currentTodayProgress = todayProgress || { wordsAdded: 0, goal: 20, completed: false }
+    // Get progress for THIS specific notebook
+    const notebookProgress = notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
     
-    // PERFORMANCE FIX: Use global review detection instead of per-notebook
-    // Per-notebook checking was causing severe performance issues
+    if (__DEV__) {
+      console.log(`🎯 Button state check for ${notebook.title}: ${notebookProgress.wordsAdded}/${notebookProgress.goal}, completed: ${notebookProgress.completed}`)
+    }
     
-    // Priority 1: Reviews available (global detection)
-    if (hasReviewsToday && reviewNotebookId === notebook.id) {
+    // Check per-notebook review status
+    const notebookReviewData = notebookReviews.get(notebook.id)
+    
+    // Priority 1: Reviews available (per-notebook detection)
+    if (notebookReviewData?.hasReviews) {
       return { 
         type: 'review', 
         text: 'Review Today\'s Words', 
-        route: `/notebook/${notebook.id}/review${reviewPageNumber ? `?page=${reviewPageNumber}` : ''}` 
+        route: `/notebook/${notebook.id}/review${notebookReviewData.pageNumber ? `?page=${notebookReviewData.pageNumber}` : ''}` 
       }
     }
     
-    // Priority 2: Words to add today (only for Bronze notebooks)
-    if ((!notebook.notebook_level || notebook.notebook_level === 'bronze') && !currentTodayProgress.completed) {
-      // Calculate current page number (convert 0-based simulation to 1-based page numbers)
-      const currentPageNumber = currentSimulatedDay + 1
+    // Priority 2: Words to add today (check THIS notebook's completion status)
+    if (!notebookProgress.completed) {
+      // Calculate current page number based on THIS notebook's timeline
+      const notebookCreated = new Date(notebook.created_at)
+      const today = getCurrentDate()
+      const daysSinceCreation = Math.floor(
+        (today.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
+      ) + 1
+      
       return { 
         type: 'add_words', 
         text: 'Add Today\'s Words', 
-        route: `/notebook/${notebook.id}?focusPage=${currentPageNumber}&openBubble=true` 
+        route: `/notebook/${notebook.id}?focusPage=${daysSinceCreation}&openBubble=true`
       }
     }
     
-    // Priority 3: All done for today or read-only notebook
-    if (notebook.notebook_level === 'silver' || notebook.notebook_level === 'gold') {
-      return {
-        type: 'info',
-        text: `${notebook.notebook_level.charAt(0).toUpperCase() + notebook.notebook_level.slice(1)} Level`,
-        route: `/notebook/${notebook.id}`
-      }
+    return { 
+      type: 'done', 
+      text: 'You\'re All Done Today! 🎉', 
+      route: null
     }
-    
-    return { type: 'done', text: 'You\'re All Done Today! 🎉', route: null }
   }
 
   // Removed unused getPendingReviews function
@@ -317,21 +548,20 @@ export default function HomeScreen() {
     return { bronze }
   }
   
-  // State for badges
-  const [notebookBadges, setNotebookBadges] = useState<{
+  // Per-notebook badge state - stores badges for each notebook separately
+  const [notebookBadgesMap, setNotebookBadgesMap] = useState<Map<string, {
     id: string
     badgeType: 'silver' | 'gold'
     totalWords: number
     reviewableWords: number
     bronzeNotebookTitle: string
-  }[]>([])
+  }[]>>(new Map())
 
-  // Load badges for Bronze notebook
-  const loadNotebookBadges = async (bronzeNotebookId: string) => {
+  // Load badges for a specific notebook
+  const loadNotebookBadges = async (notebookId: string) => {
     try {
-      // Get all words from the bronze notebook to check for Silver/Gold rounds
-      // Note: This includes words from all rounds, not just reviewable ones
-      const allWords = await supabaseService.getWordsForReview(bronzeNotebookId)
+      // Get all words from the notebook to check for Silver/Gold rounds
+      const allWords = await supabaseService.getWordsForReview(notebookId)
       
       const badges = []
       
@@ -339,7 +569,7 @@ export default function HomeScreen() {
       const silverWords = allWords.filter(word => (word as any).current_round >= 5 && (word as any).current_round <= 8)
       if (silverWords.length > 0) {
         badges.push({
-          id: `silver-${bronzeNotebookId}`,
+          id: `silver-${notebookId}`,
           badgeType: 'silver' as const,
           totalWords: silverWords.length,
           reviewableWords: silverWords.filter(word => (word as any).status === 'learning').length,
@@ -351,7 +581,7 @@ export default function HomeScreen() {
       const goldWords = allWords.filter(word => (word as any).current_round >= 9 && (word as any).current_round <= 12)
       if (goldWords.length > 0) {
         badges.push({
-          id: `gold-${bronzeNotebookId}`,
+          id: `gold-${notebookId}`,
           badgeType: 'gold' as const,
           totalWords: goldWords.length,
           reviewableWords: goldWords.filter(word => (word as any).status === 'learning').length,
@@ -359,28 +589,58 @@ export default function HomeScreen() {
         })
       }
       
-      setNotebookBadges(badges)
+      // Update the map with badges for this notebook
+      setNotebookBadgesMap(prev => {
+        const newMap = new Map(prev)
+        newMap.set(notebookId, badges)
+        return newMap
+      })
+      
     } catch (error) {
-      console.error('Error loading notebook badges:', error)
-      setNotebookBadges([])
+      console.error(`Error loading badges for notebook ${notebookId}:`, error)
+      // Set empty badges for this notebook on error
+      setNotebookBadgesMap(prev => {
+        const newMap = new Map(prev)
+        newMap.set(notebookId, [])
+        return newMap
+      })
     }
   }
 
-  // Load badges when Bronze notebook is available
-  useEffect(() => {
-    const { bronze } = categorizeNotebooks()
-    if (bronze.length > 0) {
-      loadNotebookBadges(bronze[0].id)
-    }
-  }, [appState.notebooks])
+  // Load badges for ALL notebooks when notebooks change (with caching to prevent loops)
+  const [lastBadgeLoadNotebookIds, setLastBadgeLoadNotebookIds] = useState<string>('')
   
-  // PERFORMANCE FIX: Temporarily disabled per-notebook review checking
-  // This was causing hundreds of database calls and severe performance issues
-  const checkAllNotebookReviews = useCallback(async () => {
-    console.log('🚫 Per-notebook review checking DISABLED for performance')
-    // Disabled - was causing excessive database calls
-    return
-  }, [])
+  useEffect(() => {
+    const loadAllNotebookBadges = async () => {
+      if (appState.notebooks.length === 0) {
+        setNotebookBadgesMap(new Map())
+        setLastBadgeLoadNotebookIds('')
+        return
+      }
+      
+      // Create a stable string to compare notebook IDs
+      const currentNotebookIds = appState.notebooks.map(n => n.id).sort().join(',')
+      
+      // Skip if we already loaded badges for this exact set of notebooks
+      if (currentNotebookIds === lastBadgeLoadNotebookIds) {
+        return
+      }
+      
+      console.log(`🏅 Loading badges for ${appState.notebooks.length} notebooks...`)
+      
+      // Load badges for each notebook in parallel
+      const badgePromises = appState.notebooks.map(notebook => 
+        loadNotebookBadges(notebook.id)
+      )
+      
+      await Promise.all(badgePromises)
+      setLastBadgeLoadNotebookIds(currentNotebookIds)
+      console.log('🏅 All notebook badges loaded')
+    }
+    
+    loadAllNotebookBadges()
+  }, [appState.notebooks, lastBadgeLoadNotebookIds])
+  
   
   // DISABLED: Strategic trigger 1 - was causing performance issues
   // useFocusEffect(
@@ -420,14 +680,130 @@ export default function HomeScreen() {
     setCurrentCarouselPage(currentPage)
   }
 
+  // Get overall status summary for all notebooks
+  const getNotebooksStatus = () => {
+    if (appState.notebooks.length === 0) {
+      return { type: 'empty', message: 'No notebooks yet', count: 0 }
+    }
+
+    let reviewsNeeded = 0
+    let wordsNeeded = 0
+    let allDone = 0
+
+    appState.notebooks.forEach(notebook => {
+      const notebookReviewData = notebookReviews.get(notebook.id)
+      const notebookProgress = notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
+      
+      if (notebookReviewData?.hasReviews) {
+        reviewsNeeded++
+      } else if (!notebookProgress.completed) {
+        wordsNeeded++
+      } else {
+        allDone++
+      }
+    })
+
+    if (reviewsNeeded > 0) {
+      return {
+        type: 'reviews',
+        count: reviewsNeeded,
+        text: `You have ${reviewsNeeded} notebook${reviewsNeeded > 1 ? 's' : ''} for Review`,
+        priority: 'high'
+      }
+    } else if (wordsNeeded > 0) {
+      return {
+        type: 'words',
+        count: wordsNeeded,
+        text: `You have ${wordsNeeded} notebook${wordsNeeded > 1 ? 's' : ''} for Word Addition`,
+        priority: 'medium'
+      }
+    } else {
+      return {
+        type: 'complete',
+        count: allDone,
+        text: 'All notebooks completed for today! 🎉',
+        priority: 'low'
+      }
+    }
+  }
+
+  // Smart notebook sorting: Reviews first, then incomplete, then by last_used_at
+  const sortNotebooksByPriority = (notebooks: NotebookWithStats[]) => {
+    return [...notebooks].sort((a, b) => {
+      const aReviews = notebookReviews.get(a.id)?.hasReviews || false
+      const bReviews = notebookReviews.get(b.id)?.hasReviews || false
+      const aProgress = notebookProgressMap.get(a.id) || { wordsAdded: 0, goal: a.words_per_day || 20, completed: false }
+      const bProgress = notebookProgressMap.get(b.id) || { wordsAdded: 0, goal: b.words_per_day || 20, completed: false }
+
+      // Priority 1: Reviews needed (highest priority)
+      if (aReviews && !bReviews) return -1
+      if (!aReviews && bReviews) return 1
+
+      // Priority 2: If both or neither have reviews, check word completion
+      if (!aProgress.completed && bProgress.completed) return -1
+      if (aProgress.completed && !bProgress.completed) return 1
+
+      // Priority 3: Both have same status, sort by last_used_at (most recent first)
+      const aLastUsed = new Date(a.last_used_at || a.created_at).getTime()
+      const bLastUsed = new Date(b.last_used_at || b.created_at).getTime()
+      return bLastUsed - aLastUsed
+    })
+  }
+
+  // Render status bar showing notebook summary
+  const renderStatusBar = () => {
+    if (appState.notebooks.length === 0) {
+      return null
+    }
+
+    const status = getNotebooksStatus()
+    
+    return (
+      <View style={[
+        styles.statusBar,
+        status.priority === 'high' && styles.statusBarReviews,
+        status.priority === 'medium' && styles.statusBarWords,
+        status.priority === 'low' && styles.statusBarComplete,
+      ]}>
+        <View style={styles.statusContent}>
+          {/* Icon and count badge */}
+          <View style={styles.statusLeft}>
+            <Text style={styles.statusIcon}>
+              {status.priority === 'high' ? '📚' : 
+               status.priority === 'medium' ? '✏️' : '✅'}
+            </Text>
+            {status.type !== 'complete' && (
+              <View style={[
+                styles.countBadge,
+                status.priority === 'high' && styles.countBadgeReviews,
+                status.priority === 'medium' && styles.countBadgeWords,
+              ]}>
+                <Text style={styles.countBadgeText}>{status.count}</Text>
+              </View>
+            )}
+          </View>
+          
+          {/* Clean message text */}
+          <View style={styles.statusRight}>
+            <Text style={styles.statusMainText}>
+              {status.type === 'reviews' && `Notebook${status.count > 1 ? 's' : ''} ready for Review`}
+              {status.type === 'words' && `Notebook${status.count > 1 ? 's' : ''} ready for Word Addition`}
+              {status.type === 'complete' && 'All notebooks completed for today! 🎉'}
+            </Text>
+          </View>
+        </View>
+      </View>
+    )
+  }
+
   // Component to render notebook carousel with horizontal scrolling
   const renderNotebookCarousel = () => {
     if (appState.notebooks.length === 0) {
       return null // Empty state will be shown below
     }
 
-    // Sort notebooks by last_used_at (most recent first) - already sorted by service
-    const sortedNotebooks = appState.notebooks
+    // Smart sorting: Reviews first, then incomplete, then by last activity
+    const sortedNotebooks = sortNotebooksByPriority(appState.notebooks)
 
     return (
       <View style={styles.carouselContainer}>
@@ -469,93 +845,77 @@ export default function HomeScreen() {
 
   // Component to render individual notebook card (works for any notebook)
   const renderNotebookCard = (notebook: NotebookWithStats, index: number) => {
-    // Get badge counts for dynamic styling (only for Bronze notebooks)
-    const silverBadge = notebook.notebook_level === 'bronze' ? notebookBadges.find(badge => badge.badgeType === 'silver') : undefined
-    const goldBadge = notebook.notebook_level === 'bronze' ? notebookBadges.find(badge => badge.badgeType === 'gold') : undefined
+    // Get badges for this specific notebook
+    const notebookBadges = notebookBadgesMap.get(notebook.id) || []
+    const silverBadge = notebookBadges.find(badge => badge.badgeType === 'silver')
+    const goldBadge = notebookBadges.find(badge => badge.badgeType === 'gold')
     
-    // Modern unified card styling
-    const getCardStyle = () => {
-      return styles.mainNotebookCard
-    }
+    // Calculate badge states
+    const bronzeWords = stats.totalWords - (silverBadge?.totalWords || 0) - (goldBadge?.totalWords || 0)
+    const isSilverUnlocked = silverBadge && silverBadge.totalWords > 0
+    const isGoldUnlocked = goldBadge && goldBadge.totalWords > 0
 
     return (
-      <View style={getCardStyle()}>
+      <View style={styles.mainNotebookCard}>
         <TouchableOpacity 
           onPress={() => handleNotebookPress(notebook)}
           style={styles.notebookCardContent}
         >
-          {/* Notebook Header with Icon and Flag */}
-          <View style={styles.gameNotebookHeader}>
-            <View style={[
-              styles.notebookIcon,
-              notebook.notebook_level === 'silver' && styles.silverNotebookIcon,
-              notebook.notebook_level === 'gold' && styles.goldNotebookIcon
-            ]}>
-              <Text style={styles.notebookEmoji}>
-                {notebook.notebook_level === 'bronze' ? '📚' : 
-                 notebook.notebook_level === 'silver' ? '🥈' : '🥇'}
-              </Text>
-            </View>
-            <View style={styles.notebookHeaderText}>
-              <View style={styles.notebookTitleWithFlag}>
-                <CountryFlag 
-                  isoCode={getCountryCodeFromLanguage(notebook.language_code)} 
-                  size={20} 
-                  style={styles.notebookFlag}
-                />
-                <Text style={styles.gameNotebookTitle}>{notebook.title}</Text>
+          {/* NEW DESIGN: Top row with badges left-aligned and flag right-aligned */}
+          <View style={styles.topRow}>
+            {/* Badges - Left aligned */}
+            <View style={styles.badgeRowLeft}>
+              {/* Bronze Badge - Always unlocked */}
+              <View style={styles.badgeContainer}>
+                <View style={[styles.badgeCircle, styles.bronzeBadge]}>
+                  <Text style={styles.badgeNumber}>{bronzeWords}</Text>
+                </View>
               </View>
-              <Text style={styles.gameNotebookSubtitle}>
-                {index === 0 ? `${getTotalWordsThisWeek()} words this week` : `${notebook.totalWords || 0} total words`}
-              </Text>
+              
+              {/* Silver Badge - Locked/Unlocked */}
+              <View style={styles.badgeContainer}>
+                <View style={[styles.badgeCircle, isSilverUnlocked ? styles.silverBadge : styles.silverBadgeLocked]}>
+                  {isSilverUnlocked ? (
+                    <Text style={styles.badgeNumber}>{silverBadge?.totalWords || 0}</Text>
+                  ) : (
+                    <MaterialIcons name="lock" size={20} color={colors.cardBackground} />
+                  )}
+                </View>
+              </View>
+              
+              {/* Gold Badge - Locked/Unlocked */}
+              <View style={styles.badgeContainer}>
+                <View style={[styles.badgeCircle, isGoldUnlocked ? styles.goldBadge : styles.goldBadgeLocked]}>
+                  {isGoldUnlocked ? (
+                    <Text style={styles.badgeNumber}>{goldBadge?.totalWords || 0}</Text>
+                  ) : (
+                    <MaterialIcons name="lock" size={20} color={colors.cardBackground} />
+                  )}
+                </View>
+              </View>
             </View>
+
+            {/* Flag - Right aligned */}
+            <CountryFlag 
+              isoCode={getCountryCodeFromLanguage(notebook.language_code)} 
+              size={40} 
+              style={styles.notebookFlagTopRight}
+            />
           </View>
 
-          {/* Progress Dots - Game Style (only for Bronze notebooks) */}
-          {notebook.notebook_level === 'bronze' && (
-            <View style={styles.progressDotsContainer}>
-              {/* Bronze Dot */}
-              <View style={styles.progressDot}>
-                <View style={[styles.gameLevelCircle, styles.bronzeGameCircle]}>
-                  <Text style={styles.levelNumber}>{stats.totalWords - (silverBadge?.totalWords || 0) - (goldBadge?.totalWords || 0)}</Text>
-                </View>
-                <Text style={styles.gameLevelLabel}>Bronze</Text>
-              </View>
+          {/* NEW DESIGN: Title Row */}
+          <View style={styles.titleRow}>
+            <Text style={styles.notebookTitle} numberOfLines={1}>{notebook.title}</Text>
+          </View>
 
-              {/* Connection Line */}
-              {silverBadge && silverBadge.totalWords > 0 && (
-                <>
-                  <View style={styles.connectionLine} />
-                  <View style={styles.progressDot}>
-                    <View style={[styles.gameLevelCircle, styles.silverGameCircle]}>
-                      <Text style={styles.levelNumber}>{silverBadge.totalWords}</Text>
-                    </View>
-                    <Text style={styles.gameLevelLabel}>Silver</Text>
-                  </View>
-                </>
-              )}
-
-              {/* Gold Connection */}
-              {goldBadge && goldBadge.totalWords > 0 && (
-                <>
-                  <View style={styles.connectionLine} />
-                  <View style={styles.progressDot}>
-                    <View style={[styles.gameLevelCircle, styles.goldGameCircle]}>
-                      <Text style={styles.levelNumber}>{goldBadge.totalWords}</Text>
-                    </View>
-                    <Text style={styles.gameLevelLabel}>Gold</Text>
-                  </View>
-                </>
-              )}
-            </View>
-          )}
-
-          <View style={styles.notebookStats}>
+          {/* NEW DESIGN: Stats Row */}
+          <View style={styles.statsRow}>
             <Text style={styles.totalWords}>
               {notebook.totalWords || 0} total • {notebook.masteredWords || 0} mastered
             </Text>
           </View>
 
+          {/* NEW DESIGN: Button at bottom, center-aligned */}
           {(() => {
             const notebookStatus = getNotebookStatus(notebook)
             return (
@@ -593,7 +953,6 @@ export default function HomeScreen() {
             )
           })()}
         </TouchableOpacity>
-
       </View>
     )
   }
@@ -650,7 +1009,7 @@ export default function HomeScreen() {
     }
   }, [stats.totalWords, stats.masteredWords])
 
-  const styles = createStyles(colors)
+  const styles = createStyles(colors, isDark)
 
   return (
     <View style={styles.container}>
@@ -673,6 +1032,9 @@ export default function HomeScreen() {
 
         {/* Development Time Simulation */}
         <DevTimeDisplay />
+
+        {/* Status Bar */}
+        {renderStatusBar()}
 
         {/* Notebook Carousel or Empty State */}
         {appState.notebooks.length > 0 ? (
@@ -831,7 +1193,7 @@ export default function HomeScreen() {
   )
 }
 
-const createStyles = (colors: any) => StyleSheet.create({
+const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -860,6 +1222,78 @@ const createStyles = (colors: any) => StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
+  // NEW DESIGN: Top row with badges and flag
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: SPACING.lg,
+  },
+  badgeRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    flex: 1,
+  },
+  badgeContainer: {
+    alignItems: 'center',
+  },
+  badgeCircle: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderBottomWidth: 3,
+  },
+  bronzeBadge: {
+    backgroundColor: '#CD7F32',
+    borderColor: '#B8722C',
+    borderBottomColor: '#A0651F',
+  },
+  silverBadge: {
+    backgroundColor: '#C0C0C0',
+    borderColor: '#A8A8A8',
+    borderBottomColor: '#909090',
+  },
+  goldBadge: {
+    backgroundColor: '#FFD700',
+    borderColor: '#E6C200',
+    borderBottomColor: '#CCAD00',
+  },
+  silverBadgeLocked: {
+    backgroundColor: '#8A8A8A',
+    borderColor: '#707070',
+    borderBottomColor: '#585858',
+  },
+  goldBadgeLocked: {
+    backgroundColor: '#B8A000',
+    borderColor: '#9E8800',
+    borderBottomColor: '#857000',
+  },
+  badgeText: {
+    fontSize: 16,
+  },
+  badgeNumber: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.cardBackground,
+    textAlign: 'center',
+  },
+  // NEW DESIGN: Flag at top right
+  notebookFlagTopRight: {
+    borderRadius: 4,
+  },
+  // NEW DESIGN: Title row
+  titleRow: {
+    marginBottom: SPACING.md,
+  },
+  // NEW DESIGN: Stats row  
+  statsRow: {
+    marginBottom: SPACING.lg,
+    alignItems: 'flex-start',
+  },
   notebookHeader: {
     alignItems: 'flex-end',
     marginBottom: SPACING.lg,
@@ -880,10 +1314,9 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.xl,
   },
   notebookTitle: {
-    fontSize: TYPOGRAPHY['3xl'],
+    fontSize: TYPOGRAPHY.xl,
     fontWeight: TYPOGRAPHY.bold,
     color: colors.textPrimary,
-    marginBottom: SPACING.xs,
   },
   notebookSubtitle: {
     fontSize: TYPOGRAPHY.base,
@@ -924,10 +1357,10 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   // New button color states with 3D borders
   practiceButtonReview: {
-    backgroundColor: colors.primary, // Orange for review
-    borderColor: '#D97706',
-    borderBottomColor: '#B45309',
-    shadowColor: '#D97706',
+    backgroundColor: '#E53E3E', // Red for review
+    borderColor: '#C53030',
+    borderBottomColor: '#9B2C2C',
+    shadowColor: '#E53E3E',
   },
   practiceButtonAddWords: {
     backgroundColor: colors.warning, // Yellow for add words  
@@ -936,10 +1369,10 @@ const createStyles = (colors: any) => StyleSheet.create({
     shadowColor: '#D97706',
   },
   practiceButtonDone: {
-    backgroundColor: colors.success, // Green for done
-    borderColor: '#059669',
-    borderBottomColor: '#047857',
-    shadowColor: '#059669',
+    backgroundColor: '#38A169', // User's preferred green for done
+    borderColor: '#2F855A',
+    borderBottomColor: '#276749',
+    shadowColor: '#38A169',
     opacity: 0.8,
   },
   practiceButtonTextDone: {
@@ -1333,16 +1766,6 @@ const createStyles = (colors: any) => StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
-  silverNotebookIcon: {
-    backgroundColor: '#C0C0C0',
-    borderColor: '#A8A8A8',
-    borderBottomColor: '#909090',
-  },
-  goldNotebookIcon: {
-    backgroundColor: '#FFD700',
-    borderColor: '#E8C547',
-    borderBottomColor: '#D1B000',
-  },
 
   // Additional button styles
   practiceButtonInfo: {
@@ -1578,6 +2001,160 @@ const createStyles = (colors: any) => StyleSheet.create({
     backgroundColor: '#E5E7EB',
     borderRadius: 2,
     marginHorizontal: SPACING.xs,
+  },
+
+  // Status Bar Styles
+  statusBar: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginHorizontal: SPACING.xl,
+    marginBottom: SPACING.lg,
+    borderWidth: 2,
+    ...SHADOWS.md,
+  },
+  statusBarReviews: {
+    borderColor: '#EF4444',
+    backgroundColor: isDark ? '#7F1D1D' : '#FEF2F2',
+    shadowColor: '#EF4444',
+  },
+  statusBarWords: {
+    borderColor: '#F59E0B',
+    backgroundColor: isDark ? '#92400E' : '#FFFBEB',
+    shadowColor: '#F59E0B',
+  },
+  statusBarComplete: {
+    borderColor: '#10B981',
+    backgroundColor: isDark ? '#064E3B' : '#ECFDF5',
+    shadowColor: '#10B981',
+  },
+  statusContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  statusLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  statusIcon: {
+    fontSize: TYPOGRAPHY.xl,
+  },
+  countBadge: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+  },
+  countBadgeReviews: {
+    backgroundColor: '#EF4444',
+  },
+  countBadgeWords: {
+    backgroundColor: '#F59E0B',
+  },
+  countBadgeText: {
+    color: '#FFFFFF',
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.bold,
+  },
+  statusRight: {
+    flex: 1,
+  },
+  statusMainText: {
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textPrimary,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  
+  // Number Badge Styles (Prominent circular badges)
+  numberBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  numberBadgeReviews: {
+    backgroundColor: '#EF4444',
+    borderColor: '#DC2626',
+    shadowColor: '#EF4444',
+  },
+  numberBadgeWords: {
+    backgroundColor: '#F59E0B',
+    borderColor: '#D97706',
+    shadowColor: '#F59E0B',
+  },
+  numberBadgeComplete: {
+    backgroundColor: '#10B981',
+    borderColor: '#059669',
+    shadowColor: '#10B981',
+  },
+  numberText: {
+    fontSize: TYPOGRAPHY['2xl'],
+    fontWeight: TYPOGRAPHY.extrabold,
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  numberTextReviews: {
+    color: '#FFFFFF',
+  },
+  numberTextWords: {
+    color: '#FFFFFF',
+  },
+  numberTextComplete: {
+    color: '#FFFFFF',
+  },
+  
+  
+  // Action Badge Styles (Emphasized action words)
+  actionBadge: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+    borderWidth: 2,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  actionBadgeReviews: {
+    backgroundColor: isDark ? '#7F1D1D' : '#FEE2E2',
+    borderColor: '#EF4444',
+    shadowColor: '#EF4444',
+  },
+  actionBadgeWords: {
+    backgroundColor: isDark ? '#92400E' : '#FEF3C7',
+    borderColor: '#F59E0B',
+    shadowColor: '#F59E0B',
+  },
+  actionBadgeComplete: {
+    backgroundColor: isDark ? '#064E3B' : '#D1FAE5',
+    borderColor: '#10B981',
+    shadowColor: '#10B981',
+  },
+  actionText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.extrabold,
+    letterSpacing: 0.5,
+  },
+  actionTextReviews: {
+    color: isDark ? '#F87171' : '#DC2626',
+  },
+  actionTextWords: {
+    color: isDark ? '#FBBF24' : '#D97706',
+  },
+  actionTextComplete: {
+    color: isDark ? '#34D399' : '#059669',
   },
 
 })

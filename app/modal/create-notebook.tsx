@@ -13,7 +13,6 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
-import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
@@ -40,7 +39,6 @@ const languageOptions = [
 
 export default function CreateNotebookModal() {
   const router = useRouter()
-  const { profile } = useAuth()
   const { appState, refreshNotebooks } = useApp()
   const { colors } = useTheme()
   const [title, setTitle] = useState('')
@@ -62,6 +60,11 @@ export default function CreateNotebookModal() {
       return
     }
 
+    if (title.length > 30) {
+      Alert.alert('Error', 'Notebook title must be 30 characters or less')
+      return
+    }
+
     if (!selectedLanguage) {
       Alert.alert('Error', 'Please select a language')
       return
@@ -72,28 +75,6 @@ export default function CreateNotebookModal() {
       return
     }
 
-    // Check premium limitations
-    if (profile?.subscription_status === 'free' && appState.notebooks.length >= 3) {
-      Alert.alert(
-        'Premium Feature',
-        'Free users can create up to 3 notebooks. Upgrade to Premium to create unlimited notebooks and unlock advanced features.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Upgrade', 
-            onPress: () => {
-              if (router.canGoBack()) {
-                router.back()
-              } else {
-                router.push('/(tabs)/')
-              }
-              router.push('/modal/paywall')
-            }
-          }
-        ]
-      )
-      return
-    }
 
     setLoading(true)
     try {
@@ -176,11 +157,16 @@ export default function CreateNotebookModal() {
             placeholderTextColor={colors.textSecondary}
             value={title}
             onChangeText={setTitle}
-            maxLength={50}
+            maxLength={30}
           />
-          <Text style={styles.helpText}>
-            Choose a descriptive name for your vocabulary collection
-          </Text>
+          <View style={styles.titleFooter}>
+            <Text style={styles.helpText}>
+              Choose a descriptive name for your vocabulary collection
+            </Text>
+            <Text style={[styles.characterCounter, title.length > 30 && styles.characterCounterError]}>
+              {title.length}/30
+            </Text>
+          </View>
         </View>
 
         {/* Language Selection with Dropdown */}
@@ -382,6 +368,21 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
     marginTop: SPACING.sm,
     lineHeight: 20,
+    flex: 1,
+  },
+  titleFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginTop: SPACING.sm,
+  },
+  characterCounter: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  characterCounterError: {
+    color: colors.error,
   },
   
   // Language Dropdown

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react'
 import { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../supabase/client'
 import { Tables } from '../types/database'
@@ -35,6 +35,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<Tables<'profiles'>['Row'] | null>(null)
   const [loading, setLoading] = useState(true)
+  
+  // Throttling for refreshProfile to prevent infinite loops
+  const lastProfileRefreshRef = useRef(0)
+  const isRefreshingProfileRef = useRef(false)
 
   useEffect(() => {
     // Get initial session
@@ -81,16 +85,56 @@ export function AuthProvider({ children }: AuthProviderProps) {
         userProfile = await profileOperations.create(newProfile)
       }
       
-      setProfile(userProfile)
+      // PERFORMANCE: Only update profile state if data actually changed
+      setProfile(prevProfile => {
+        // If no previous profile, always set the new one
+        if (!prevProfile) {
+          if (__DEV__) console.log('🔄 AuthContext: Setting initial profile')
+          return userProfile
+        }
+        
+        // Deep equality check to prevent unnecessary updates
+        const profileChanged = JSON.stringify(prevProfile) !== JSON.stringify(userProfile)
+        if (!profileChanged) {
+          if (__DEV__) console.log('🔄 AuthContext: Profile data identical, skipping update (prevents loop!)')
+          return prevProfile // Keep the same reference to avoid triggering useEffect
+        }
+        
+        if (__DEV__) console.log('🔄 AuthContext: Profile data changed, updating state')
+        return userProfile
+      })
     } catch (error) {
       console.error('Error loading profile:', error)
     }
   }
 
-  // Function to refresh profile data
+  // Function to refresh profile data with throttling to prevent loops
   async function refreshProfile() {
-    if (session?.user?.id) {
+    if (!session?.user?.id) return
+    
+    // THROTTLING: Prevent rapid successive calls and infinite loops
+    const now = Date.now()
+    const timeSinceLastRefresh = now - lastProfileRefreshRef.current
+    const THROTTLE_MS = 2000 // Only allow one refresh per 2 seconds
+    
+    if (isRefreshingProfileRef.current) {
+      if (__DEV__) console.log('🔄 AuthContext: Profile refresh already in progress, skipping')
+      return
+    }
+    
+    if (timeSinceLastRefresh < THROTTLE_MS) {
+      if (__DEV__) console.log(`🔄 AuthContext: Profile refresh throttled, last call was ${timeSinceLastRefresh}ms ago`)
+      return
+    }
+    
+    isRefreshingProfileRef.current = true
+    lastProfileRefreshRef.current = now
+    
+    try {
+      if (__DEV__) console.log('🔄 AuthContext: Refreshing profile data')
       await loadProfile(session.user.id)
+    } finally {
+      isRefreshingProfileRef.current = false
     }
   }
 

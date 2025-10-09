@@ -38,7 +38,6 @@ function AppWithTheme() {
       <DevTimeConnector />
       <AuthGuard>
         <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen 
@@ -64,16 +63,16 @@ function AppWithTheme() {
             }} 
           />
           <Stack.Screen 
-            name="modal/paywall" 
+            name="modal/settings" 
             options={{ 
-              title: 'Upgrade',
+              title: 'Settings',
               presentation: 'modal'
             }} 
           />
           <Stack.Screen 
-            name="modal/settings" 
+            name="modal/notebook-menu" 
             options={{ 
-              title: 'Settings',
+              title: 'Notebook Options',
               presentation: 'modal'
             }} 
           />

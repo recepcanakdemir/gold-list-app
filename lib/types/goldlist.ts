@@ -11,7 +11,6 @@ type ProfileRow = Tables<'profiles'>['Row']
 export type Round = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 export type NotebookLevel = 'bronze' | 'silver' | 'gold'
 export type WordStatus = 'learning' | 'mastered' | 'failed'
-export type SubscriptionStatus = 'free' | 'weekly' | 'annual'
 export type DifficultyTag = 'NORMAL' | 'EXTREMELY_HARD' | 'MASTER_LEVEL' | 'LEGENDARY'
 
 export interface GoldListSettings {
@@ -104,16 +103,6 @@ export interface InputSession {
   mode: 'focus' | 'fullpage'
 }
 
-// Onboarding types
-export interface OnboardingProgress {
-  currentStep: number
-  totalSteps: number
-  hasCompletedWelcome: boolean
-  hasCompletedTutorial: boolean
-  hasCreatedFirstNotebook: boolean
-  hasAddedFirstWords: boolean
-  hasCompletedFirstReview: boolean
-}
 
 // Analytics types
 export interface AnalyticsData {
@@ -135,7 +124,6 @@ export interface AppState {
   currentNotebook: NotebookWithStats | null
   reviewSession: ReviewSession | null
   inputSession: InputSession | null
-  onboardingProgress: OnboardingProgress
   settings: GoldListSettings
   isOffline: boolean
   lastSyncTime: Date | null
