@@ -1,28 +1,31 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { LoadingIndicator } from '@/components/LoadingIndicator'
+import { StreakAnimation } from '@/components/StreakAnimation'
+import { RADIUS, SHADOWS, SPACING, TYPOGRAPHY } from '@/lib/constants/design'
+import { useApp } from '@/lib/contexts/AppContext'
+import { useAuth } from '@/lib/contexts/AuthContext'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
+import { useTheme } from '@/lib/contexts/ThemeContext'
+import { geminiService } from '@/lib/services/geminiService'
+import { supabaseService } from '@/lib/services/supabaseService'
+import { translationService } from '@/lib/services/translationService'
+import { NotebookWithStats } from '@/lib/types/goldlist'
+import MaterialIcons from '@expo/vector-icons/MaterialIcons'
+import { useLocalSearchParams, useRouter } from 'expo-router'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  View,
+  Alert,
+  Animated,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
-  Modal,
-  Animated,
+  View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useRouter, useLocalSearchParams } from 'expo-router'
-import { supabaseService } from '@/lib/services/supabaseService'
-import { useApp } from '@/lib/contexts/AppContext'
-import { NotebookWithStats } from '@/lib/types/goldlist'
-import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
-import { useTheme } from '@/lib/contexts/ThemeContext'
-import { useDevTime } from '@/lib/contexts/DevTimeContext'
-import { LoadingIndicator } from '@/components/LoadingIndicator'
-import { geminiService } from '@/lib/services/geminiService'
-import { AISentenceState, DEFAULT_AI_STATE } from '@/lib/types/aiGeneration'
 
 interface WordEntry {
   word: string
@@ -30,6 +33,9 @@ interface WordEntry {
   notes: string
   word_type?: string
   example_sentence?: string
+  sentence_bold?: string
+  sentence_meaning?: string
+  meaning_bold?: string
   ai_generated?: boolean
 }
 
@@ -40,6 +46,9 @@ interface SavedWord {
   notes: string
   word_type?: string
   example_sentence?: string
+  sentence_bold?: string
+  sentence_meaning?: string
+  meaning_bold?: string
   ai_generated?: boolean
 }
 
@@ -48,6 +57,7 @@ export default function WordInputScreen() {
   const { id, page: pageParam } = useLocalSearchParams<{ id: string; page?: string }>()
   const { colors } = useTheme()
   const { refreshNotebooks, updateNotebookLastUsed } = useApp()
+  const { recordUserActivity, profile } = useAuth()
   const { currentSimulatedDay } = useDevTime()
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [mode, setMode] = useState<'focus' | 'fullpage'>('focus')
@@ -62,6 +72,9 @@ export default function WordInputScreen() {
     notes: '', 
     word_type: 'unknown',
     example_sentence: '',
+    sentence_bold: '',
+    sentence_meaning: '',
+    meaning_bold: '',
     ai_generated: false
   })
   const [savedWords, setSavedWords] = useState<SavedWord[]>([])
@@ -71,10 +84,15 @@ export default function WordInputScreen() {
   // New state for overlay modal
   const [showAddWordModal, setShowAddWordModal] = useState(false)
   
+  // Streak animation state
+  const [showStreakAnimation, setShowStreakAnimation] = useState(false)
+  const [previousStreakCount, setPreviousStreakCount] = useState(0)
   
-  // AI sentence generation state
-  const [aiStates, setAiStates] = useState<Map<string, AISentenceState>>(new Map())
-  const [cachedSentences, setCachedSentences] = useState<Map<string, string>>(new Map())
+  // AI sentence generation state - now supports unlimited generation
+  const [aiGenerationStates, setAiGenerationStates] = useState<Map<string, boolean>>(new Map()) // Track loading state per word
+  
+  // Translation state - track loading state per word
+  const [translationLoadingStates, setTranslationLoadingStates] = useState<Map<string, boolean>>(new Map())
   
   // Animated progress value for smooth transitions
   const [animatedProgress] = useState(new Animated.Value(0))
@@ -115,6 +133,10 @@ export default function WordInputScreen() {
     return false
   }, [mode, words, currentIndex, isWordEntryComplete])
 
+  // Focus mode navigation logic
+  const canGoNext = isCurrentWordComplete && (currentIndex < words.length - 1 || words.length < (notebook?.words_per_day || 20))
+  const canSave = words.some(w => (w.word || '').trim() && (w.meaning || '').trim())
+
   // List mode validation
   const isCurrentFormComplete = useMemo(() => {
     return isWordEntryComplete(currentWordForm)
@@ -125,85 +147,189 @@ export default function WordInputScreen() {
     return `${(word?.trim() || '').toLowerCase()}-${(meaning?.trim() || '').toLowerCase()}`
   }, [])
 
-  const generateAISentence = useCallback(async (word: string, meaning: string, wordKey?: string) => {
+  const generateAISentence = useCallback(async (word: string, meaning: string, wordIndex: number) => {
     if (!word?.trim() || !meaning?.trim()) {
       Alert.alert('Required Fields Missing', 'Please enter both word and meaning before generating a sentence.')
       return
     }
 
-    const key = wordKey || getWordKey(word, meaning)
+    const key = getWordKey(word, meaning)
     
     // Set loading state
-    setAiStates(prev => new Map(prev.set(key, {
-      ...DEFAULT_AI_STATE,
-      isGenerating: true
-    })))
+    setAiGenerationStates(prev => new Map(prev.set(key, true)))
 
     try {
       const request = {
         word: word?.trim() || '',
         translation: meaning?.trim() || '',
         targetLanguage: notebook?.language || 'English',
-        nativeLanguage: 'English', // Could be made configurable
+        nativeLanguage: 'English', // Could be made configurable later
         difficultyLevel: 'intermediate' as const
       }
 
+      console.log(`🤖 Generating unlimited sentence for "${word}" → "${meaning}"`)
       const result = await geminiService.generateSentences(request)
       
-      // Update AI state with the first sentence
-      setAiStates(prev => new Map(prev.set(key, {
-        isGenerating: false,
-        displaySentence: result.displaySentence,
-        hasCachedSentence: true,
-        usedContext: result.usedContext,
-        error: null,
-        generatedAt: result.generatedAt
-      })))
+      console.log(`🔍 CLIENT DEBUG - AI Generation Result:`, JSON.stringify(result, null, 2))
+      
+      // Update the specific word in the list with both sentence and meaning
+      setWords(prevWords => {
+        const newWords = [...prevWords]
+        if (newWords[wordIndex]) {
+          newWords[wordIndex] = {
+            ...newWords[wordIndex],
+            example_sentence: result.sentence,
+            sentence_bold: result.sentenceBold,
+            sentence_meaning: result.sentenceMeaning,
+            meaning_bold: result.meaningBold,
+            ai_generated: true
+          }
+          console.log(`🔍 CLIENT DEBUG - Updated word data:`, JSON.stringify(newWords[wordIndex], null, 2))
+        }
+        return newWords
+      })
 
-      // Cache the second sentence
-      setCachedSentences(prev => new Map(prev.set(key, result.cachedSentence)))
-
-      return result.displaySentence
+      console.log(`✅ Generated sentence: "${result.sentence}" with meaning: "${result.sentenceMeaning}"`)
+      return result.sentence
     } catch (error) {
       console.error('AI generation error:', error)
-      setAiStates(prev => new Map(prev.set(key, {
-        ...DEFAULT_AI_STATE,
-        error: 'Failed to generate sentence. Please try again.'
-      })))
+      
+      // Since geminiService now handles retries and fallbacks gracefully,
+      // this catch block should rarely be reached. If it is, the service
+      // has already provided a fallback sentence, so we just log the issue.
+      
+      // Don't show technical errors to users - the service handles fallbacks
+      console.log('🔄 Using service fallback sentence due to persistent issues')
+    } finally {
+      // Clear loading state
+      setAiGenerationStates(prev => new Map(prev.set(key, false)))
     }
   }, [notebook?.language, getWordKey])
 
-  const getAlternativeSentence = useCallback((word: string, meaning: string) => {
-    const key = getWordKey(word, meaning)
-    const cached = cachedSentences.get(key)
-    
-    if (cached) {
-      // Swap the displayed and cached sentences
-      const currentState = aiStates.get(key)
-      if (currentState?.displaySentence) {
-        setCachedSentences(prev => new Map(prev.set(key, currentState.displaySentence)))
-        setAiStates(prev => new Map(prev.set(key, {
-          ...currentState,
-          displaySentence: cached
-        })))
-        return cached
-      }
-    }
-    
-    Alert.alert('No Alternative Available', 'Generate a sentence first to get an alternative.')
-    return null
-  }, [getWordKey, aiStates, cachedSentences])
 
   const getAiState = useCallback((word: string, meaning: string) => {
     const key = getWordKey(word, meaning)
-    return aiStates.get(key) || DEFAULT_AI_STATE
-  }, [getWordKey, aiStates])
+    return aiGenerationStates.get(key) || false
+  }, [getWordKey, aiGenerationStates])
+
+  // Translation Functions
+  const translateWord = useCallback(async (word: string, wordIndex: number) => {
+    if (!word?.trim()) {
+      Alert.alert('No Word to Translate', 'Please enter a word before translating.')
+      return
+    }
+
+    const key = getWordKey(word, '')
+    
+    // Set loading state
+    setTranslationLoadingStates(prev => new Map(prev.set(key, true)))
+
+    try {
+      const request = {
+        word: word.trim(),
+        sourceLanguage: notebook?.language || 'French',
+        targetLanguage: 'English' // Could be made configurable later
+      }
+
+      console.log(`🌐 Translating word "${word}" from ${request.sourceLanguage} to ${request.targetLanguage}`)
+      const translation = await translationService.translateWord(request)
+      
+      // Update the specific word's meaning with the translation
+      setWords(prevWords => {
+        const newWords = [...prevWords]
+        if (newWords[wordIndex]) {
+          newWords[wordIndex] = {
+            ...newWords[wordIndex],
+            meaning: translation
+          }
+        }
+        return newWords
+      })
+
+      console.log(`✅ Translated "${word}" → "${translation}"`)
+      return translation
+
+    } catch (error) {
+      console.error('Translation error:', error)
+      
+      // Show the specific error message from translationService
+      if (error instanceof Error) {
+        Alert.alert('Translation Error', error.message)
+      } else {
+        Alert.alert('Translation Failed', 'Failed to translate word. Please try again or enter meaning manually.')
+      }
+    } finally {
+      // Clear loading state
+      setTranslationLoadingStates(prev => new Map(prev.set(key, false)))
+    }
+  }, [notebook?.language, getWordKey])
+
+  const getTranslationState = useCallback((word: string) => {
+    const key = getWordKey(word, '')
+    return translationLoadingStates.get(key) || false
+  }, [getWordKey, translationLoadingStates])
+
+  // Dedicated translation function for List mode modal
+  const translateWordInModal = useCallback(async (word: string): Promise<void> => {
+    if (!word?.trim()) {
+      Alert.alert('No Word to Translate', 'Please enter a word before translating.')
+      return
+    }
+
+    const key = getWordKey(word, '')
+    
+    // Set loading state
+    setTranslationLoadingStates(prev => new Map(prev.set(key, true)))
+
+    try {
+      const request = {
+        word: word.trim(),
+        sourceLanguage: notebook?.language || 'French',
+        targetLanguage: 'English' // Could be made configurable later
+      }
+
+      console.log(`🌐 Translating word "${word}" from ${request.sourceLanguage} to ${request.targetLanguage} in modal`)
+      const translation = await translationService.translateWord(request)
+      
+      // Update the current word form's meaning with the translation
+      setCurrentWordForm(prev => ({
+        ...prev,
+        meaning: translation
+      }))
+
+      console.log(`✅ Translated "${word}" → "${translation}" in modal`)
+
+    } catch (error) {
+      console.error('Translation error in modal:', error)
+      
+      // Show the specific error message from translationService
+      if (error instanceof Error) {
+        Alert.alert('Translation Error', error.message)
+      } else {
+        Alert.alert('Translation Failed', 'Failed to translate word. Please try again or enter meaning manually.')
+      }
+    } finally {
+      // Clear loading state
+      setTranslationLoadingStates(prev => new Map(prev.set(key, false)))
+    }
+  }, [notebook?.language, getWordKey, setCurrentWordForm])
   
   const styles = createStyles(colors)
 
   useEffect(() => {
     loadNotebook()
   }, [id])
+
+  // Track streak changes for animation
+  useEffect(() => {
+    if (profile?.streak_count && profile.streak_count > previousStreakCount && previousStreakCount > 0) {
+      // Streak increased, show animation
+      setShowStreakAnimation(true)
+    }
+    if (profile?.streak_count !== undefined) {
+      setPreviousStreakCount(profile.streak_count)
+    }
+  }, [profile?.streak_count, previousStreakCount])
 
   // Animate progress changes smoothly
   useEffect(() => {
@@ -282,11 +408,13 @@ export default function WordInputScreen() {
       setNotebook(notebookData)
     } catch (error) {
       Alert.alert('Error', 'Failed to load notebook')
-      if (router.canGoBack()) {
-        router.back()
-      } else {
-        router.push('/(tabs)/')
-      }
+      setTimeout(() => {
+        if (router.canGoBack()) {
+          router.back()
+        } else {
+          router.push('/(tabs)/')
+        }
+      }, 100)
     }
   }
 
@@ -337,6 +465,7 @@ export default function WordInputScreen() {
       notes: '',
       word_type: 'unknown',
       example_sentence: '',
+      sentence_meaning: '',
       ai_generated: false,
     }))
     setWords(initialWords)
@@ -367,6 +496,7 @@ export default function WordInputScreen() {
         notes: '', 
         word_type: 'unknown',
         example_sentence: '',
+        sentence_meaning: '',
         ai_generated: false 
       }])
     } else {
@@ -417,6 +547,9 @@ export default function WordInputScreen() {
         translation: (word.meaning || '').trim(),
         meaning: (word.meaning || '').trim(),
         example_sentence: (word.example_sentence || '').trim() || undefined,
+        sentence_bold: (word.sentence_bold || '').trim() || undefined,
+        sentence_meaning: (word.sentence_meaning || '').trim() || undefined,
+        meaning_bold: (word.meaning_bold || '').trim() || undefined,
         notes: (word.notes || '').trim() || undefined,
         word_type: word.word_type || 'unknown',
         position_in_page: index + 1,
@@ -431,6 +564,9 @@ export default function WordInputScreen() {
         translation: (word.meaning || '').trim(),
         meaning: (word.meaning || '').trim(),
         example_sentence: (word.example_sentence || '').trim() || undefined,
+        sentence_bold: (word.sentence_bold || '').trim() || undefined,
+        sentence_meaning: (word.sentence_meaning || '').trim() || undefined,
+        meaning_bold: (word.meaning_bold || '').trim() || undefined,
         notes: (word.notes || '').trim() || undefined,
         word_type: word.word_type || 'unknown',
         position_in_page: index + 1,
@@ -442,96 +578,15 @@ export default function WordInputScreen() {
       return
     }
 
-    setLoading(true)
-    try {
-      // Get or create today's page
-      const currentPage = await supabaseService.getTodaysPage(id!)
-      if (!currentPage) {
-        Alert.alert('Error', 'Unable to create or access today\'s page.')
-        setLoading(false)
-        return
+    // Immediately navigate to save page with words data
+    router.push({
+      pathname: '/word-save',
+      params: {
+        wordsToSave: JSON.stringify(wordsToSave),
+        notebookTitle: notebook?.title || 'Unknown Notebook',
+        notebookId: id!
       }
-
-
-      // Check word limit for the page
-      const currentWordsOnPage = currentPage.words?.length || 0
-      const maxWordsPerDay = notebook?.words_per_day || 20
-      const availableSlots = maxWordsPerDay - currentWordsOnPage
-
-      if (wordsToSave.length > availableSlots) {
-        Alert.alert(
-          'Word Limit Exceeded', 
-          `This page can only hold ${availableSlots} more words (${currentWordsOnPage}/${maxWordsPerDay} already added). Please remove ${wordsToSave.length - availableSlots} words.`
-        )
-        setLoading(false)
-        return
-      }
-      
-      // Add words to the current page
-      await supabaseService.addWords(currentPage.id, wordsToSave)
-      
-      // Immediately update progress without database refetch
-      if (typeof window !== 'undefined' && (window as any).onWordsAdded) {
-        (window as any).onWordsAdded(id!, wordsToSave.length)
-      }
-
-      // Update notebook last used for smart ordering
-      updateNotebookLastUsed(id!)
-
-      // PERFORMANCE: Skip profile refresh since addWords() already updated profile stats
-      await refreshNotebooks(true)
-
-      Alert.alert(
-        'Success!',
-        `Added ${wordsToSave.length} words to your notebook. They'll be ready for review in 2 weeks.`,
-        [
-          {
-            text: 'Add More Words',
-            onPress: () => {
-              if (mode === 'focus') {
-                initializeWords()
-                setCurrentIndex(0)
-              } else {
-                setSavedWords([])
-                setCurrentWordForm({ 
-                  word: '', 
-                  meaning: '', 
-                  notes: '', 
-                  word_type: 'unknown',
-                  example_sentence: '',
-                  ai_generated: false
-                })
-                setEditingWordId(null)
-              }
-            },
-          },
-          {
-            text: 'Done',
-            onPress: () => {
-              // Navigate back
-              if (router.canGoBack()) {
-                router.back()
-              } else {
-                router.push('/(tabs)/')
-              }
-              
-              // Set flag that words were added for home screen to detect
-              setTimeout(() => {
-                if (typeof window !== 'undefined') {
-                  (window as any).wordsJustAdded = true
-                }
-              }, 100)
-            },
-            style: 'default',
-          },
-        ]
-      )
-    } catch (error) {
-      console.error('❌ Error saving words:', error)
-      Alert.alert('Error', 'Failed to save words. Please try again.')
-    } finally {
-      setLoading(false)
-    }
+    })
   }
 
   // Enhanced progress calculation with real-time updates
@@ -599,6 +654,7 @@ export default function WordInputScreen() {
       notes: '', 
       word_type: 'unknown',
       example_sentence: '',
+      sentence_meaning: '',
       ai_generated: false
     })
   }
@@ -612,6 +668,7 @@ export default function WordInputScreen() {
         notes: wordToEdit.notes,
         word_type: wordToEdit.word_type || 'unknown',
         example_sentence: wordToEdit.example_sentence || '',
+        sentence_meaning: wordToEdit.sentence_meaning || '',
         ai_generated: wordToEdit.ai_generated || false
       })
       setEditingWordId(wordId)
@@ -626,6 +683,7 @@ export default function WordInputScreen() {
       notes: '', 
       word_type: 'unknown',
       example_sentence: '',
+      sentence_meaning: '',
       ai_generated: false
     })
     setEditingWordId(null)
@@ -643,6 +701,7 @@ export default function WordInputScreen() {
       notes: '', 
       word_type: 'unknown',
       example_sentence: '',
+      sentence_meaning: '',
       ai_generated: false
     })
     setEditingWordId(null)
@@ -683,16 +742,18 @@ export default function WordInputScreen() {
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => {
-            if (router.canGoBack()) {
-              router.back()
-            } else {
-              router.push('/(tabs)/')
-            }
+            setTimeout(() => {
+              if (router.canGoBack()) {
+                router.back()
+              } else {
+                router.push('/(tabs)/')
+              }
+            }, 100)
           }}>
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
@@ -755,40 +816,78 @@ export default function WordInputScreen() {
         </View>
 
 
-        {/* Content */}
-        {mode === 'focus' ? (
-          <FocusMode
-            words={words}
-            currentIndex={currentIndex}
-            onUpdateWord={updateWord}
-            onUpdateWordWithAISentence={updateWordWithAISentence}
-            onNext={handleNext}
-            onPrevious={handlePrevious}
-            onSave={handleSave}
-            maxWords={notebook?.words_per_day || 20}
-            styles={styles}
-            isCurrentWordComplete={isCurrentWordComplete}
-            isWordValid={isWordValid}
-            isMeaningValid={isMeaningValid}
-            loading={loading}
-            onGenerateAISentence={generateAISentence}
-            onGetAlternativeSentence={getAlternativeSentence}
-            getAiState={getAiState}
-          />
-        ) : (
-          <NewListMode
-            currentWordForm={currentWordForm}
-            setCurrentWordForm={setCurrentWordForm}
-            savedWords={savedWords}
-            editingWordId={editingWordId}
-            maxWords={notebook?.words_per_day || 20}
-            onSaveWord={handleSaveCurrentWord}
-            onEditWord={handleEditWord}
-            onCancelEdit={handleCancelEdit}
-            onDeleteWord={handleDeleteWord}
-            formLoading={formLoading}
-            styles={styles}
-          />
+        {/* Content Container - fills available space */}
+        <View style={styles.mainContent}>
+          {mode === 'focus' ? (
+            <FocusMode
+              words={words}
+              currentIndex={currentIndex}
+              onUpdateWord={updateWord}
+              onUpdateWordWithAISentence={updateWordWithAISentence}
+              styles={styles}
+              onGenerateAISentence={generateAISentence}
+              getAiState={getAiState}
+              onTranslateWord={translateWord}
+              getTranslationState={getTranslationState}
+            />
+          ) : (
+            <NewListMode
+              currentWordForm={currentWordForm}
+              setCurrentWordForm={setCurrentWordForm}
+              savedWords={savedWords}
+              editingWordId={editingWordId}
+              maxWords={notebook?.words_per_day || 20}
+              onSaveWord={handleSaveCurrentWord}
+              onEditWord={handleEditWord}
+              onCancelEdit={handleCancelEdit}
+              onDeleteWord={handleDeleteWord}
+              formLoading={formLoading}
+              styles={styles}
+            />
+          )}
+        </View>
+
+        {/* Navigation - Positioned at bottom */}
+        {mode === 'focus' && (
+          <View style={styles.bottomNavigation}>
+            <TouchableOpacity
+              style={[
+                styles.navButton, 
+                styles.navButtonSecondary,
+                currentIndex === 0 && styles.navButtonDisabled
+              ]}
+              onPress={handlePrevious}
+              disabled={currentIndex === 0}
+            >
+              <Text style={[
+                styles.navButtonText, 
+                styles.navButtonSecondaryText,
+                currentIndex === 0 && styles.navButtonTextDisabled
+              ]}>
+                ← Previous
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[
+                styles.navButton, 
+                ((currentIndex >= (notebook?.words_per_day || 20) - 1) ? (!canSave || loading) : (!canGoNext || loading)) && styles.navButtonDisabled
+              ]} 
+              onPress={(currentIndex >= (notebook?.words_per_day || 20) - 1) ? handleSave : handleNext}
+              disabled={(currentIndex >= (notebook?.words_per_day || 20) - 1) ? (!canSave || loading) : (!canGoNext || loading)}
+            >
+              {loading ? (
+                <LoadingIndicator size={16} color={colors.cardBackground} />
+              ) : (
+                <Text style={[
+                  styles.navButtonText, 
+                  ((currentIndex >= (notebook?.words_per_day || 20) - 1) ? (!canSave || loading) : (!canGoNext || loading)) && styles.navButtonTextDisabled
+                ]}>
+                  {(currentIndex >= (notebook?.words_per_day || 20) - 1) ? 'Save' : 'Next →'}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         )}
 
         {/* Floating Add Button - Only in List Mode */}
@@ -829,8 +928,40 @@ export default function WordInputScreen() {
             formLoading={formLoading}
             onClose={() => setShowAddWordModal(false)}
             colors={colors}
+            onTranslateWord={translateWordInModal}
+            getTranslationState={getTranslationState}
+            onGenerateAISentence={async (word: string, meaning: string) => {
+              try {
+                const request = {
+                  word: word?.trim() || '',
+                  translation: meaning?.trim() || '',
+                  targetLanguage: notebook?.language || 'English',
+                  nativeLanguage: 'English',
+                  difficultyLevel: 'intermediate' as const
+                }
+                const result = await geminiService.generateSentences(request)
+                setCurrentWordForm(prev => ({
+                  ...prev,
+                  example_sentence: result.sentence,
+                  sentence_bold: result.sentenceBold,
+                  sentence_meaning: result.sentenceMeaning,
+                  meaning_bold: result.meaningBold,
+                  ai_generated: true
+                }))
+              } catch (error) {
+                console.error('AI generation error in modal:', error)
+              }
+            }}
+            getAiState={getAiState}
           />
         </Modal>
+
+        {/* Streak Animation */}
+        <StreakAnimation
+          streakCount={profile?.streak_count || 0}
+          visible={showStreakAnimation}
+          onAnimationComplete={() => setShowStreakAnimation(false)}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -885,18 +1016,11 @@ interface FocusModeProps {
   currentIndex: number
   onUpdateWord: (index: number, field: keyof WordEntry, value: string) => void
   onUpdateWordWithAISentence: (index: number, sentence: string) => void
-  onNext: () => void
-  onPrevious: () => void
-  onSave: () => void
-  maxWords: number
   styles: any
-  isCurrentWordComplete: boolean
-  isWordValid: (word: string) => boolean
-  isMeaningValid: (meaning: string) => boolean
-  loading: boolean
   onGenerateAISentence: (word: string, meaning: string) => Promise<string | undefined>
-  onGetAlternativeSentence: (word: string, meaning: string) => string | null
-  getAiState: (word: string, meaning: string) => AISentenceState
+  getAiState: (word: string, meaning: string) => boolean
+  onTranslateWord: (word: string, wordIndex: number) => Promise<string | undefined>
+  getTranslationState: (word: string) => boolean
 }
 
 function FocusMode({ 
@@ -904,29 +1028,14 @@ function FocusMode({
   currentIndex, 
   onUpdateWord, 
   onUpdateWordWithAISentence, 
-  onNext, 
-  onPrevious, 
-  onSave, 
-  maxWords, 
-  styles, 
-  isCurrentWordComplete, 
-  isWordValid, 
-  isMeaningValid, 
-  loading,
+  styles,
   onGenerateAISentence,
-  onGetAlternativeSentence,
-  getAiState
+  getAiState,
+  onTranslateWord,
+  getTranslationState
 }: FocusModeProps) {
+  const { colors } = useTheme()
   const currentWord = words[currentIndex]
-  
-  // Check if Next button should be enabled
-  const canGoNext = isCurrentWordComplete && (currentIndex < words.length - 1 || words.length < maxWords)
-  
-  // Check if we're on the last possible word (should show Save instead of Next)
-  const isLastWord = currentIndex >= maxWords - 1
-  
-  // For Save button, we should allow saving if there are any completed words, not just the current one
-  const canSave = words.some(w => (w.word || '').trim() && (w.meaning || '').trim())
 
   return (
     <View style={styles.focusContainer}>
@@ -954,13 +1063,29 @@ function FocusMode({
 
         <View style={styles.inputGroup}>
           <Text style={styles.inputLabel}>Definition <Text style={styles.requiredAsterisk}>*</Text></Text>
-          <TextInput
-            style={styles.inlineInput}
-            placeholder="Translation or meaning"
-            value={currentWord?.meaning || ''}
-            onChangeText={(value) => onUpdateWord(currentIndex, 'meaning', value)}
-            placeholderTextColor={styles.placeholderText?.color}
-          />
+          <View style={styles.inputWithButton}>
+            <TextInput
+              style={[styles.inlineInput, styles.definitionInput]}
+              placeholder="Translation or meaning"
+              value={currentWord?.meaning || ''}
+              onChangeText={(value) => onUpdateWord(currentIndex, 'meaning', value)}
+              placeholderTextColor={styles.placeholderText?.color}
+            />
+            <TouchableOpacity
+              style={[
+                styles.translateButton,
+                (!currentWord?.word?.trim() || getTranslationState(currentWord?.word || '')) && styles.translateButtonDisabled
+              ]}
+              onPress={() => onTranslateWord(currentWord?.word || '', currentIndex)}
+              disabled={!currentWord?.word?.trim() || getTranslationState(currentWord?.word || '')}
+            >
+              {getTranslationState(currentWord?.word || '') ? (
+                <LoadingIndicator size={16} color={colors.cardBackground} />
+              ) : (
+                <MaterialIcons name="translate" size={16} color={colors.cardBackground} />
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* AI Sentence Generation Section */}
@@ -968,63 +1093,16 @@ function FocusMode({
           word={currentWord?.word || ''}
           meaning={currentWord?.meaning || ''}
           currentSentence={currentWord?.example_sentence || ''}
+          currentSentenceMeaning={currentWord?.sentence_meaning || ''}
           onGenerateSentence={async () => {
-            const sentence = await onGenerateAISentence(currentWord?.word || '', currentWord?.meaning || '')
-            if (sentence) {
-              onUpdateWordWithAISentence(currentIndex, sentence)
-            }
-          }}
-          onGetAlternative={() => {
-            const alternative = onGetAlternativeSentence(currentWord?.word || '', currentWord?.meaning || '')
-            if (alternative) {
-              onUpdateWordWithAISentence(currentIndex, alternative)
-            }
+            await onGenerateAISentence(currentWord?.word || '', currentWord?.meaning || '', currentIndex)
+            // generateAISentence already updates the word state with both sentence and meaning
           }}
           onManualEdit={(sentence) => onUpdateWord(currentIndex, 'example_sentence', sentence)}
           aiState={getAiState(currentWord?.word || '', currentWord?.meaning || '')}
           styles={styles}
         />
       </ScrollView>
-
-      <View style={styles.focusNavigation}>
-        <TouchableOpacity
-          style={[
-            styles.navButton, 
-            styles.navButtonSecondary,
-            currentIndex === 0 && styles.navButtonDisabled
-          ]}
-          onPress={onPrevious}
-          disabled={currentIndex === 0}
-        >
-          <Text style={[
-            styles.navButtonText, 
-            styles.navButtonSecondaryText,
-            currentIndex === 0 && styles.navButtonTextDisabled
-          ]}>
-            ← Previous
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[
-            styles.navButton, 
-            (isLastWord ? (!canSave || loading) : (!canGoNext || loading)) && styles.navButtonDisabled
-          ]} 
-          onPress={isLastWord ? onSave : onNext}
-          disabled={isLastWord ? (!canSave || loading) : (!canGoNext || loading)}
-        >
-          {loading ? (
-            <LoadingIndicator size={16} color={styles.navButtonText.color} />
-          ) : (
-            <Text style={[
-              styles.navButtonText, 
-              (isLastWord ? (!canSave || loading) : (!canGoNext || loading)) && styles.navButtonTextDisabled
-            ]}>
-              {isLastWord ? 'Save' : 'Next →'}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
     </View>
   )
 }
@@ -1137,6 +1215,10 @@ interface AddWordModalProps {
   formLoading: boolean
   onClose: () => void
   colors: any
+  onTranslateWord: (word: string) => Promise<void>
+  getTranslationState: (word: string) => boolean
+  onGenerateAISentence: (word: string, meaning: string) => Promise<void>
+  getAiState: (word: string, meaning: string) => boolean
 }
 
 function AddWordModal({
@@ -1151,7 +1233,11 @@ function AddWordModal({
   onDeleteWord,
   formLoading,
   onClose,
-  colors
+  colors,
+  onTranslateWord,
+  getTranslationState,
+  onGenerateAISentence,
+  getAiState
 }: AddWordModalProps) {
   const styles = createStyles(colors)
 
@@ -1203,24 +1289,76 @@ function AddWordModal({
 
               <View style={styles.rowInputGroup}>
                 <Text style={styles.rowInputLabel}>Definition <Text style={styles.requiredAsterisk}>*</Text></Text>
-                <TextInput
-                  style={styles.rowInput}
-                  placeholder="Translation or meaning"
-                  value={currentWordForm.meaning}
-                  onChangeText={(value) => setCurrentWordForm({ ...currentWordForm, meaning: value })}
-                />
+                <View style={styles.definitionInputContainer}>
+                  <TextInput
+                    style={[styles.rowInput, styles.definitionInput]}
+                    placeholder="Translation or meaning"
+                    value={currentWordForm.meaning}
+                    onChangeText={(value) => setCurrentWordForm({ ...currentWordForm, meaning: value })}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.translateButton,
+                      (!currentWordForm.word?.trim() || getTranslationState(currentWordForm.word || '')) && styles.translateButtonDisabled
+                    ]}
+                    onPress={() => onTranslateWord(currentWordForm.word || '')}
+                    disabled={!currentWordForm.word?.trim() || getTranslationState(currentWordForm.word || '')}
+                  >
+                    {getTranslationState(currentWordForm.word || '') ? (
+                      <LoadingIndicator size={16} color={colors.cardBackground} />
+                    ) : (
+                      <MaterialIcons name="translate" size={16} color={colors.cardBackground} />
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
 
+              {/* AI Sentence Generation Section */}
               <View style={styles.rowInputGroup}>
                 <Text style={styles.rowInputLabel}>Example Sentence (Optional)</Text>
                 <TextInput
-                  style={styles.rowInput}
-                  placeholder="Example sentence using the word"
+                  style={[styles.rowInput, styles.sentenceInput]}
+                  placeholder="AI-generated or manual example sentence"
                   value={currentWordForm.example_sentence}
                   onChangeText={(value) => setCurrentWordForm({ ...currentWordForm, example_sentence: value })}
                   multiline={true}
                   numberOfLines={2}
                 />
+                
+                {/* Sentence Meaning Display */}
+                {currentWordForm.sentence_meaning && (
+                  <View style={styles.sentenceMeaningContainer}>
+                    <Text style={styles.sentenceMeaningLabel}>Translation:</Text>
+                    <Text style={styles.sentenceMeaningText}>{currentWordForm.sentence_meaning}</Text>
+                  </View>
+                )}
+                
+                {/* AI Controls */}
+                <View style={styles.aiControls}>
+                  <TouchableOpacity
+                    style={[
+                      styles.aiButton,
+                      styles.generateButton,
+                      ((!currentWordForm.word?.trim() || !currentWordForm.meaning?.trim()) || 
+                       getAiState(currentWordForm.word || '', currentWordForm.meaning || '')) && styles.aiButtonDisabled
+                    ]}
+                    onPress={() => onGenerateAISentence(currentWordForm.word || '', currentWordForm.meaning || '')}
+                    disabled={(!currentWordForm.word?.trim() || !currentWordForm.meaning?.trim()) || 
+                             getAiState(currentWordForm.word || '', currentWordForm.meaning || '')}
+                  >
+                    {getAiState(currentWordForm.word || '', currentWordForm.meaning || '') ? (
+                      <LoadingIndicator size={16} color={colors.cardBackground} />
+                    ) : (
+                      <>
+                        <Text style={styles.aiButtonIcon}>✨</Text>
+                        <Text style={[styles.aiButtonText, ((!currentWordForm.word?.trim() || !currentWordForm.meaning?.trim()) || 
+                                     getAiState(currentWordForm.word || '', currentWordForm.meaning || '')) && styles.aiButtonTextDisabled]}>
+                          Generate
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
 
 
@@ -1261,10 +1399,10 @@ interface AISentenceSectionProps {
   word: string
   meaning: string
   currentSentence: string
+  currentSentenceMeaning: string
   onGenerateSentence: () => Promise<void>
-  onGetAlternative: () => void
   onManualEdit: (sentence: string) => void
-  aiState: AISentenceState
+  aiState: boolean
   styles: any
 }
 
@@ -1272,8 +1410,8 @@ function AISentenceSection({
   word,
   meaning,
   currentSentence,
+  currentSentenceMeaning,
   onGenerateSentence,
-  onGetAlternative,
   onManualEdit,
   aiState,
   styles
@@ -1299,46 +1437,40 @@ function AISentenceSection({
         placeholderTextColor={styles.placeholderText?.color}
       />
 
+      {/* Sentence Meaning Display */}
+      {currentSentenceMeaning && (
+        <View style={styles.sentenceMeaningContainer}>
+          <Text style={styles.sentenceMeaningLabel}>Translation:</Text>
+          <Text style={styles.sentenceMeaningText}>{currentSentenceMeaning}</Text>
+        </View>
+      )}
+
       {/* AI Controls */}
       <View style={styles.aiControls}>
         <TouchableOpacity
           style={[
             styles.aiButton,
             styles.generateButton,
-            (!canGenerate || aiState.isGenerating) && styles.aiButtonDisabled
+            (!canGenerate || aiState) && styles.aiButtonDisabled
           ]}
           onPress={onGenerateSentence}
-          disabled={!canGenerate || aiState.isGenerating}
+          disabled={!canGenerate || aiState}
         >
-          {aiState.isGenerating ? (
+          {aiState ? (
             <LoadingIndicator size={16} color={colors.cardBackground} />
           ) : (
             <>
               <Text style={styles.aiButtonIcon}>✨</Text>
-              <Text style={[styles.aiButtonText, (!canGenerate || aiState.isGenerating) && styles.aiButtonTextDisabled]}>
+              <Text style={[styles.aiButtonText, (!canGenerate || aiState) && styles.aiButtonTextDisabled]}>
                 Generate
               </Text>
             </>
           )}
         </TouchableOpacity>
 
-        {aiState.hasCachedSentence && (
-          <TouchableOpacity
-            style={[styles.aiButton, styles.alternativeButton]}
-            onPress={onGetAlternative}
-          >
-            <Text style={styles.aiButtonIcon}>🔄</Text>
-            <Text style={styles.aiButtonText}>Alternative</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
-      {/* Status Messages */}
-      {aiState.error && (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{aiState.error}</Text>
-        </View>
-      )}
+      {/* Status Messages - removed since we simplified aiState to boolean */}
     </View>
   )
 }
@@ -1350,6 +1482,19 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   keyboardView: {
     flex: 1,
+  },
+  mainContent: {
+    flex: 1,
+  },
+  bottomNavigation: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.lg,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   loadingContainer: {
     flex: 1,
@@ -1385,25 +1530,25 @@ const createStyles = (colors: any) => StyleSheet.create({
     gap: SPACING.md,
   },
   
-  // Progress Section - Now separate from header
+  // Progress Section - Reduced vertical spacing
   progressSection: {
     paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     backgroundColor: colors.cardBackground,
-    minHeight: 60, // Ensure minimum height
   },
   progressContainer: {
     alignItems: 'center',
     width: '100%',
+    gap: SPACING.sm, // Reduced gap between progress bar and text
   },
   progressBar: {
     width: '100%',
-    height: 12, // Increased height for better visibility
-    backgroundColor: colors.gray300, // Darker background for better contrast
+    height: 12,
+    backgroundColor: colors.gray300,
     borderRadius: 6,
-    marginBottom: SPACING.sm,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -1411,12 +1556,13 @@ const createStyles = (colors: any) => StyleSheet.create({
     height: '100%',
     backgroundColor: colors.primary,
     borderRadius: 6,
-    minWidth: 2, // Minimum width to always show some progress
+    minWidth: 2,
   },
   progressText: {
-    fontSize: TYPOGRAPHY.base, // Slightly larger text
-    color: colors.textPrimary, // Darker text for better visibility
+    fontSize: TYPOGRAPHY.base,
+    color: colors.textPrimary,
     fontWeight: TYPOGRAPHY.semibold,
+    marginTop: SPACING.xs, // Small gap after progress bar
   },
   
   // Mode Toggle and Header Save Button
@@ -1472,10 +1618,9 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.textPrimary,
   },
   
-  // Focus Mode Styles
+  // Focus Mode Styles  
   focusContainer: {
     flex: 1,
-    paddingHorizontal: SPACING.lg,
   },
   focusHeader: {
     alignItems: 'flex-start',
@@ -1493,6 +1638,8 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   focusContent: {
     flex: 1,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.lg, // Push content down from progress bar
   },
   inputGroup: {
     marginBottom: SPACING.md,
@@ -1522,6 +1669,30 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.base,
     backgroundColor: colors.cardBackground,
     color: colors.textPrimary,
+  },
+  inputWithButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  definitionInput: {
+    flex: 1,
+  },
+  translateButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.md,
+    minWidth: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  translateButtonDisabled: {
+    backgroundColor: colors.gray300,
+    opacity: 0.6,
+  },
+  translateButtonText: {
+    fontSize: TYPOGRAPHY.lg,
   },
   placeholderText: {
     color: colors.textSecondary,
@@ -1567,11 +1738,31 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.primary,
     fontWeight: TYPOGRAPHY.semibold,
   },
-  focusNavigation: {
+  // Keyboard-aware navigation - simple bottom placement
+  keyboardAwareNavigation: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.md,
     gap: SPACING.lg,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  focusNavigation: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    paddingBottom: SPACING.lg, // Extra bottom padding for safe area
+    gap: SPACING.lg,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   navButton: {
     flex: 1,
@@ -1620,7 +1811,7 @@ const createStyles = (colors: any) => StyleSheet.create({
   fullPageContainer: {
     flex: 1,
     paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.lg,
+    paddingTop: SPACING.lg, // Consistent top spacing with focus mode
   },
   scrollViewContent: {
     paddingBottom: SPACING['4xl'], // Extra padding for keyboard space
@@ -1677,6 +1868,11 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingVertical: SPACING.sm,
     fontSize: TYPOGRAPHY.sm,
     backgroundColor: colors.cardBackground,
+  },
+  definitionInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
   },
   addWordButton: {
     backgroundColor: colors.gray100,
@@ -1912,15 +2108,11 @@ const createStyles = (colors: any) => StyleSheet.create({
     borderBottomWidth: 5,
     borderColor: '#D97706',
     borderBottomColor: '#B45309',
-    shadowColor: '#D97706',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
+    elevation: 5,
   },
   floatingAddButtonText: {
     fontSize: 24,
@@ -2069,6 +2261,25 @@ const createStyles = (colors: any) => StyleSheet.create({
   sentenceInput: {
     minHeight: 60,
     textAlignVertical: 'top',
+  },
+  sentenceMeaningContainer: {
+    marginTop: SPACING.sm,
+    padding: SPACING.sm,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: RADIUS.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  sentenceMeaningLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: TYPOGRAPHY.medium,
+    color: colors.textSecondary,
+    marginBottom: SPACING.xs,
+  },
+  sentenceMeaningText: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textPrimary,
+    fontStyle: 'italic',
   },
   aiControls: {
     flexDirection: 'row',

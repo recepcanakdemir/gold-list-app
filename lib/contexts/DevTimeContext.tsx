@@ -118,6 +118,21 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
       console.warn('⚠️ Error during auto-page creation:', error)
     }
 
+    // Validate daily streaks when simulation advances 
+    try {
+      console.log(`🔥 DevTime: Attempting daily streak validation for day ${newDay}`)
+      // Use a global window function to avoid circular dependency
+      if (typeof window !== 'undefined' && (window as any).validateDailyStreak) {
+        console.log(`🔥 DevTime: Global validateDailyStreak function found, calling it`)
+        await (window as any).validateDailyStreak(getCurrentDate())
+        console.log(`🔥 DevTime: Daily streak validation completed`)
+      } else {
+        console.warn(`🔥 DevTime: Global validateDailyStreak function NOT found`)
+      }
+    } catch (error) {
+      console.warn('⚠️ Error during streak validation:', error)
+    }
+
     // Notify registered callbacks about day change
     dayChangeCallbacksRef.current.forEach(callback => {
       try {

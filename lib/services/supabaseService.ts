@@ -147,6 +147,9 @@ export interface CreateWordData {
   meaning: string
   notes?: string
   example_sentence?: string
+  sentence_bold?: string
+  sentence_meaning?: string
+  meaning_bold?: string
   word_type?: string
   position_in_page: number
 }
@@ -450,6 +453,9 @@ class SupabaseService {
         meaning: word.meaning || word.translation,
         notes: word.notes || null,
         example_sentence: word.example_sentence || null,
+        sentence_bold: word.sentence_bold || null,
+        sentence_meaning: word.sentence_meaning || null,
+        meaning_bold: word.meaning_bold || null,
         word_type: word.word_type || 'unknown',
         position_in_page: word.position_in_page,
         current_round: 1 as 1,  // Cast to round_number enum type
@@ -476,6 +482,16 @@ class SupabaseService {
       }))
 
       console.log('⚡ Executing 3 operations in parallel: words insert, page update, profile query...')
+      
+      // Debug: Log the words being inserted to check if bold fields are included
+      console.log('🔍 DATABASE INSERT DEBUG - Words to insert:')
+      wordsToInsert.forEach((word, index) => {
+        console.log(`  Word ${index + 1}: ${word.word}`)
+        console.log(`    sentence_bold: ${word.sentence_bold}`)
+        console.log(`    meaning_bold: ${word.meaning_bold}`)
+        console.log(`    example_sentence: ${word.example_sentence}`)
+        console.log(`    sentence_meaning: ${word.sentence_meaning}`)
+      })
 
       // Execute all operations in parallel
       const [wordsResult, pageUpdateResult, profileUpdateResult] = await Promise.allSettled([
@@ -624,6 +640,149 @@ class SupabaseService {
       // Clear cache to ensure fresh data on next load
       this.clearCache()
     }, 'deleteNotebook')
+  }
+
+  // Streak Management Functions
+  async updateStreak(userId: string, hasActivity: boolean, currentDate?: Date): Promise<void> {
+    const today = (currentDate || new Date()).toISOString().split('T')[0]
+    console.log(`🔥 supabaseService: updateStreak called - hasActivity=${hasActivity}, date=${today}`)
+    
+    return withRetry(async () => {
+      const { data: profile, error: fetchError } = await supabase
+        .from('profiles')
+        .select('streak_count, longest_streak, streak_miss_count, last_activity_date')
+        .eq('id', userId)
+        .single()
+
+      if (fetchError) throw fetchError
+      if (!profile) throw new Error('Profile not found')
+
+      const today = (currentDate || new Date()).toISOString().split('T')[0] // YYYY-MM-DD format
+      const lastActivity = profile.last_activity_date
+      
+      let newStreakCount = profile.streak_count
+      let newLongestStreak = profile.longest_streak
+      let newMissCount = profile.streak_miss_count || 0
+      let newLastActivityDate = lastActivity
+
+      if (hasActivity) {
+        // User did something today
+        const daysSinceLastActivity = lastActivity ? 
+          Math.floor((new Date(today).getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24)) : 999
+
+        console.log(`🔥 supabaseService: User HAS activity - daysSinceLastActivity=${daysSinceLastActivity}`)
+
+        if (daysSinceLastActivity <= 2) {
+          // Consecutive day or within 2-day grace period (as per user requirement)
+          newStreakCount += 1
+          console.log(`🔥 supabaseService: Within grace period, streak increased to ${newStreakCount}`)
+        } else {
+          // Too many days missed (>2), start new streak
+          newStreakCount = 1
+          console.log(`🔥 supabaseService: Too many days missed, streak reset to 1`)
+        }
+
+        // Update longest streak if current streak is higher
+        if (newStreakCount > newLongestStreak) {
+          newLongestStreak = newStreakCount
+        }
+
+        newMissCount = 0
+        newLastActivityDate = today
+      } else {
+        // User missed today - check if we should reset
+        const daysSinceLastActivity = lastActivity ? 
+          Math.floor((new Date(today).getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24)) : 999
+
+        console.log(`🔥 supabaseService: User MISSED day - daysSinceLastActivity=${daysSinceLastActivity}, currentStreak=${profile.streak_count}`)
+
+        if (daysSinceLastActivity > 2) {
+          // More than 2 days missed, reset streak (as per user requirement)
+          newStreakCount = 0
+          newMissCount = 0
+          console.log(`🔥 supabaseService: >2 days missed, RESETTING streak to 0`)
+        } else {
+          // Within grace period, increment miss count but keep streak
+          newMissCount = Math.min(newMissCount + 1, 2)
+          console.log(`🔥 supabaseService: Within grace period, keeping streak=${newStreakCount}, missCount=${newMissCount}`)
+        }
+        // Note: We don't update last_activity_date when missing
+      }
+
+      // Update the profile
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          streak_count: newStreakCount,
+          longest_streak: newLongestStreak,
+          streak_miss_count: newMissCount,
+          last_activity_date: newLastActivityDate,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId)
+
+      if (updateError) throw updateError
+
+      console.log(`🔥 Streak updated for user ${userId.slice(0, 8)}: ${newStreakCount} days`)
+    }, 'updateStreak')
+  }
+
+  async getStreakStatus(userId: string): Promise<{
+    streakCount: number
+    longestStreak: number
+    missCount: number
+    lastActivityDate: string | null
+    daysInGracePeriod: number
+  }> {
+    return withRetry(async () => {
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('streak_count, longest_streak, streak_miss_count, last_activity_date')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      if (!profile) throw new Error('Profile not found')
+
+      const today = new Date().toISOString().split('T')[0]
+      const lastActivity = profile.last_activity_date
+      
+      const daysSinceLastActivity = lastActivity ? 
+        Math.floor((new Date(today).getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24)) : 0
+
+      const daysInGracePeriod = Math.max(0, Math.min(2, daysSinceLastActivity - 1))
+
+      return {
+        streakCount: profile.streak_count,
+        longestStreak: profile.longest_streak,
+        missCount: profile.streak_miss_count || 0,
+        lastActivityDate: profile.last_activity_date,
+        daysInGracePeriod
+      }
+    }, 'getStreakStatus')
+  }
+
+  async recordActivity(userId: string, currentDate?: Date): Promise<void> {
+    // This function is called when user does a streak-worthy activity
+    await this.updateStreak(userId, true, currentDate)
+  }
+
+  async resetStreak(userId: string): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          streak_count: 0,
+          longest_streak: 0,
+          streak_miss_count: 0,
+          last_activity_date: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId)
+      
+      if (error) throw error
+      console.log(`🔄 Streak reset for user ${userId.slice(0, 8)}`)
+    }, 'resetStreak')
   }
 
   async getPages(notebookId: string): Promise<PageWithWords[]> {
@@ -792,10 +951,10 @@ class SupabaseService {
         throw new Error(`Failed to get words for review: ${wordsError.message}`)
       }
 
-      // Filter words that are due today and classify by rounds
+      // Filter words that are due today or overdue (accumulate missed reviews)
       const reviewableWords = (allWords || []).filter(word => {
         const reviewDateString = word.review_date
-        const isDue = reviewDateString === currentDateString
+        const isDue = reviewDateString <= currentDateString
         
         // Classify words by their current round for logging
         const badgeType = word.current_round <= 4 ? 'Bronze' : 

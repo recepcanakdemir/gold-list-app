@@ -1,9 +1,37 @@
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useApp } from '@/lib/contexts/AppContext'
+import { useAuth } from '@/lib/contexts/AuthContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { ROUND_COLORS } from '@/lib/types/goldlist'
 import { getBadgeInfo, getBadgeType, getDisplayRound, getBadgeEmoji } from '@/lib/utils/badgeUtils'
+// Utility function to render HTML-style <b>text</b> tags as bold React Native Text
+const renderBoldText = (text: string, baseStyle: any) => {
+  if (!text) return null
+  
+  // Split text by <b>...</b> tags while preserving the tags
+  const parts = text.split(/(<b>.*?<\/b>)/g)
+  
+  return (
+    <Text style={baseStyle}>
+      {parts.map((part, index) => {
+        // Check if this part is a bold tag
+        if (part.startsWith('<b>') && part.endsWith('</b>')) {
+          // Remove the <b> tags and apply bold style
+          const boldText = part.slice(3, -4)
+          return (
+            <Text key={index} style={{ fontWeight: 'bold' }}>
+              {boldText}
+            </Text>
+          )
+        } else {
+          // Regular text
+          return part
+        }
+      })}
+    </Text>
+  )
+}
 import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -20,6 +48,7 @@ import {
 import Swiper from 'react-native-deck-swiper'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
+import { StreakAnimation } from '@/components/StreakAnimation'
 
 // Type aliases for cleaner code
 type WordWithReviews = any // Using any for now to avoid type conflicts
@@ -34,6 +63,7 @@ export default function ReviewScreen() {
   const { colors } = useTheme()
   const { getCurrentDate } = useDevTime()
   const { updateNotebookLastUsed } = useApp()
+  const { recordUserActivity, profile } = useAuth()
   
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [words, setWords] = useState<WordWithReviews[]>([])
@@ -66,6 +96,17 @@ export default function ReviewScreen() {
       console.log(`📚 Captured ${words.length} original words for completion screen`)
     }
   }, [words])
+
+  // Track streak changes for animation in completion screen
+  useEffect(() => {
+    if (profile?.streak_count && profile.streak_count > previousStreakCount && previousStreakCount > 0 && showCompletionScreen) {
+      // Streak increased and we're on completion screen, show animation
+      setTimeout(() => setShowStreakAnimation(true), 1000) // Delay to let completion animation settle
+    }
+    if (profile?.streak_count !== undefined) {
+      setPreviousStreakCount(profile.streak_count)
+    }
+  }, [profile?.streak_count, previousStreakCount, showCompletionScreen])
 
   // Animation values for card deck - each card has independent animations
   const currentCardTranslateX = useRef(new Animated.Value(0)).current
@@ -158,19 +199,19 @@ export default function ReviewScreen() {
         notebookData = results[0]
         const allNotebookWords = results[1]
         
-        // Filter for words due today only (for notebook-specific reviews)
+        // Filter for words due today or overdue (accumulate missed reviews)
         const today = getCurrentDate()
         const todayString = today.toISOString().split('T')[0]
         
         loadedWords = allNotebookWords.filter(word => {
           const wordReviewDate = word.review_date
-          const isDueToday = wordReviewDate === todayString
+          const isDueToday = wordReviewDate <= todayString
           
           console.log(`🔍 Word "${word.word}": reviewDate=${wordReviewDate}, today=${todayString}, isDue=${isDueToday}`)
           return isDueToday && !word.is_mastered && word.status === 'learning'
         })
         
-        console.log(`📖 Notebook-specific review: ${loadedWords.length} words due today from notebook ${id} (filtered from ${allNotebookWords.length} total words)`)
+        console.log(`📖 Notebook-specific review: ${loadedWords.length} words due today or overdue from notebook ${id} (filtered from ${allNotebookWords.length} total words)`)
       }
       
       setNotebook(notebookData)
@@ -564,6 +605,10 @@ export default function ReviewScreen() {
   const [showWordsList, setShowWordsList] = useState<'remembered' | 'forgotten' | null>(null)
   const [showExtremelyHardStats, setShowExtremelyHardStats] = useState(false)
   
+  // Streak animation state
+  const [showStreakAnimation, setShowStreakAnimation] = useState(false)
+  const [previousStreakCount, setPreviousStreakCount] = useState(0)
+  
   // Gesture timing for swipe detection
   const gestureStartTime = useRef(0)
   
@@ -586,6 +631,9 @@ export default function ReviewScreen() {
         console.log(`🚀 Reviews to process:`, reviewsToProcess.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
         await supabaseService.processBatchWordReviews(reviewsToProcess)
         console.log('✅ Batch processing completed successfully')
+        
+        // Record streak activity for completing reviews
+        await recordUserActivity()
         
         // Immediately update review status without database refetch
         if (typeof window !== 'undefined' && (window as any).onReviewsCompleted) {
@@ -744,10 +792,15 @@ export default function ReviewScreen() {
               }
             ]}>
               {/* Example Sentence at the top if available */}
-              {word.example_sentence && (
-                <Text style={[styles.cardExampleSentence, { color: '#000000' }]}>
-                  "{word.example_sentence}"
-                </Text>
+              {(word.sentence_bold || word.example_sentence) && (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={[styles.cardExampleSentence, { color: '#000000', textAlign: 'center' }]}>
+                    "{renderBoldText(
+                      word.sentence_bold || word.example_sentence,
+                      [styles.cardExampleSentence, { color: '#000000' }]
+                    )}"
+                  </Text>
+                </View>
               )}
               <Text style={[styles.cardWord, { color: '#000000' }]}>{word.word}</Text>
               {word.word_type && word.word_type !== 'unknown' && (
@@ -787,10 +840,26 @@ export default function ReviewScreen() {
               }
             ]}>
               {/* Example Sentence at the top if available */}
-              {word.example_sentence && (
-                <Text style={[styles.cardExampleSentence, { color: '#000000' }]}>
-                  "{word.example_sentence}"
-                </Text>
+              {(word.sentence_bold || word.example_sentence) && (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={[styles.cardExampleSentence, { color: '#000000', textAlign: 'center' }]}>
+                    "{renderBoldText(
+                      word.sentence_bold || word.example_sentence,
+                      [styles.cardExampleSentence, { color: '#000000' }]
+                    )}"
+                  </Text>
+                </View>
+              )}
+              {/* Sentence meaning if available */}
+              {(word.meaning_bold || word.sentence_meaning) && (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={[styles.cardSentenceMeaning, { color: '#000000', textAlign: 'center' }]}>
+                    {renderBoldText(
+                      word.meaning_bold || word.sentence_meaning,
+                      [styles.cardSentenceMeaning, { color: '#000000' }]
+                    )}
+                  </Text>
+                </View>
               )}
               <Text style={[styles.cardMeaning, { color: '#000000' }]}>{word.meaning}</Text>
               <Text style={[styles.cardOriginal, { color: '#000000' }]}>{word.word}</Text>
@@ -1307,6 +1376,13 @@ export default function ReviewScreen() {
             </TouchableOpacity>
           </Animated.View>
         </Animated.View>
+
+        {/* Streak Animation */}
+        <StreakAnimation
+          streakCount={profile?.streak_count || 0}
+          visible={showStreakAnimation}
+          onAnimationComplete={() => setShowStreakAnimation(false)}
+        />
       </SafeAreaView>
     )
   }
@@ -1699,6 +1775,15 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingHorizontal: 16,
     opacity: 0.8,
     lineHeight: 24,
+  },
+  cardSentenceMeaning: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 16,
+    opacity: 0.7,
+    lineHeight: 22,
+    color: '#666666',
   },
   cardMeaning: {
     fontSize: 28,

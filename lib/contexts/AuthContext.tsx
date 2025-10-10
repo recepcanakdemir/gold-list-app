@@ -3,6 +3,7 @@ import { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../supabase/client'
 import { Tables } from '../types/database'
 import { profileOperations } from '../supabase/operations'
+import { supabaseService } from '../services/supabaseService'
 
 interface AuthContextType {
   session: Session | null
@@ -15,6 +16,11 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>
   signInWithApple: () => Promise<void>
   refreshProfile: () => Promise<void>
+  updateUserStreak: (hasActivity: boolean) => Promise<void>
+  getStreakStatus: () => Promise<{streak_count: number, days_missed: number, is_at_risk: boolean} | null>
+  recordUserActivity: () => Promise<void>
+  validateDailyStreak: (currentDate?: Date) => Promise<void>
+  resetUserStreak: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -41,6 +47,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const isRefreshingProfileRef = useRef(false)
 
   useEffect(() => {
+    // Set up global function for DevTime integration (avoids circular dependency)
+    if (typeof window !== 'undefined') {
+      (window as any).validateDailyStreak = validateDailyStreak
+    }
+    
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -79,10 +90,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
           email: session?.user?.email || '',
           subscription_status: 'free' as const,
           streak_count: 0,
+          longest_streak: 0,
+          streak_miss_count: 0,
           total_words_added: 0,
           total_words_mastered: 0,
         }
         userProfile = await profileOperations.create(newProfile)
+      }
+      
+      // Validate and update streak on app load
+      try {
+        // Use a separate call that doesn't depend on session being set yet
+        const today = new Date().toISOString().split('T')[0]
+        const lastActivity = userProfile.last_activity_date
+        
+        if (!lastActivity || lastActivity !== today) {
+          const hasActivityToday = false // No activity yet today
+          await supabaseService.updateStreak(userId, hasActivityToday)
+          
+          // Refresh profile to get updated streak data
+          userProfile = await profileOperations.get(userId) || userProfile
+        }
+      } catch (error) {
+        console.error('Error validating daily streak:', error)
       }
       
       // PERFORMANCE: Only update profile state if data actually changed
@@ -208,6 +238,120 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
+  async function updateUserStreak(hasActivity: boolean) {
+    if (!session?.user?.id) return
+    
+    try {
+      await supabaseService.updateStreak(session.user.id, hasActivity)
+      await refreshProfile()
+    } catch (error) {
+      console.error('Error updating streak:', error)
+    }
+  }
+
+  async function getUserStreakStatus() {
+    if (!session?.user?.id) return null
+    
+    try {
+      return await supabaseService.getStreakStatus(session.user.id)
+    } catch (error) {
+      console.error('Error getting streak status:', error)
+      return null
+    }
+  }
+
+  async function recordUserActivity() {
+    if (!session?.user?.id) return
+    
+    try {
+      await supabaseService.recordActivity(session.user.id)
+      await refreshProfile()
+    } catch (error) {
+      console.error('Error recording activity:', error)
+    }
+  }
+
+  async function validateDailyStreak(currentDate?: Date) {
+    const today = (currentDate || new Date()).toISOString().split('T')[0]
+    console.log(`🔥 AuthContext: validateDailyStreak called for ${today}`)
+    
+    // Helper function to get available user ID with fallback
+    const getAvailableUserId = async (): Promise<string | null> => {
+      // Try context session first
+      if (session?.user?.id) {
+        console.log(`🔥 AuthContext: Using context session ID`)
+        return session.user.id
+      }
+      
+      // Fallback to direct Supabase session query
+      try {
+        const { data: { session: directSession } } = await supabase.auth.getSession()
+        if (directSession?.user?.id) {
+          console.log(`🔥 AuthContext: Using direct Supabase session ID`)
+          return directSession.user.id
+        }
+      } catch (error) {
+        console.log(`🔥 AuthContext: Error getting direct session:`, error)
+      }
+      
+      return null
+    }
+    
+    // Retry logic with exponential backoff
+    const maxRetries = 4
+    const retryDelays = [0, 100, 200, 500, 1000] // ms
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const userId = await getAvailableUserId()
+      
+      if (userId) {
+        console.log(`🔥 AuthContext: User ID found on attempt ${attempt + 1}: ${userId}`)
+        
+        try {
+          // Get current profile to check last activity
+          const userProfile = await profileOperations.get(userId)
+          if (!userProfile) {
+            console.log(`🔥 AuthContext: No user profile found, skipping validation`)
+            return
+          }
+          
+          const lastActivity = userProfile.last_activity_date
+          console.log(`🔥 AuthContext: lastActivity = ${lastActivity}, today = ${today}`)
+          
+          console.log(`🔥 AuthContext: Always calling updateStreak with hasActivity=false for daily validation`)
+          // Always validate daily streak regardless of last activity date
+          const hasActivityToday = false // No activity yet today
+          await supabaseService.updateStreak(userId, hasActivityToday, currentDate)
+          console.log(`🔥 AuthContext: updateStreak completed successfully`)
+          return // Success - exit retry loop
+        } catch (error) {
+          console.error('Error validating daily streak:', error)
+          return // Don't retry on business logic errors
+        }
+      }
+      
+      // If no user ID and not the last attempt, wait and retry
+      if (attempt < maxRetries - 1) {
+        const delay = retryDelays[attempt + 1]
+        console.log(`🔥 AuthContext: No user session on attempt ${attempt + 1}, retrying in ${delay}ms...`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+    
+    console.log(`🔥 AuthContext: No user session found after ${maxRetries} attempts, skipping validation`)
+  }
+
+  async function resetUserStreak() {
+    if (!session?.user?.id) return
+    
+    try {
+      await supabaseService.resetStreak(session.user.id)
+      await refreshProfile()
+    } catch (error) {
+      console.error('Error resetting streak:', error)
+    }
+  }
+
   const value: AuthContextType = {
     session,
     user: session?.user || null,
@@ -219,6 +363,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signInWithGoogle,
     signInWithApple,
     refreshProfile,
+    updateUserStreak,
+    getStreakStatus: getUserStreakStatus,
+    recordUserActivity,
+    validateDailyStreak,
+    resetUserStreak,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

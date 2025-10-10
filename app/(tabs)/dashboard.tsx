@@ -7,6 +7,7 @@ import {
   ScrollView,
   RefreshControl,
   Dimensions,
+  Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
@@ -22,7 +23,7 @@ const { width: screenWidth } = Dimensions.get('window')
 
 export default function DashboardScreen() {
   const router = useRouter()
-  const { profile } = useAuth()
+  const { profile, resetUserStreak } = useAuth()
   const { appState, refreshNotebooks } = useApp()
   const { colors } = useTheme()
   const { currentSimulatedDay } = useDevTime()
@@ -126,6 +127,21 @@ export default function DashboardScreen() {
       loadDashboardData()
     ])
     setRefreshing(false)
+  }
+
+  const handleResetStreak = () => {
+    Alert.alert(
+      'Reset Streak',
+      'Reset streak to 0? This is for testing only.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Reset', 
+          style: 'destructive',
+          onPress: resetUserStreak
+        }
+      ]
+    )
   }
 
   // Performance data using real stats
@@ -255,6 +271,14 @@ export default function DashboardScreen() {
           <View style={styles.streakContainer}>
             <View style={styles.currentStreak}>
               <Text style={styles.streakEmoji}>🔥</Text>
+              {__DEV__ && (
+                <TouchableOpacity
+                  style={styles.resetStreakButton}
+                  onPress={handleResetStreak}
+                >
+                  <Text style={styles.resetStreakIcon}>🔄</Text>
+                </TouchableOpacity>
+              )}
               <View>
                 <Text style={styles.streakNumber}>{profile?.streak_count || 0}</Text>
                 <Text style={styles.streakLabel}>days</Text>
@@ -534,6 +558,17 @@ const createStyles = (colors: any) => StyleSheet.create({
   streakEmoji: {
     fontSize: TYPOGRAPHY['2xl'],
     marginRight: SPACING.md,
+  },
+  resetStreakButton: {
+    marginLeft: -4,
+    marginRight: SPACING.xs,
+    padding: 4,
+    borderRadius: 12,
+    backgroundColor: colors.gray100,
+    opacity: 0.7,
+  },
+  resetStreakIcon: {
+    fontSize: 16,
   },
   streakNumber: {
     fontSize: TYPOGRAPHY['2xl'],

@@ -14,6 +14,7 @@ export interface Database {
           subscription_transaction_id: string | null
           streak_count: number
           longest_streak: number
+          streak_miss_count: number
           total_words_added: number
           total_words_mastered: number
           last_activity_date: string | null
@@ -32,6 +33,7 @@ export interface Database {
           subscription_transaction_id?: string | null
           streak_count?: number
           longest_streak?: number
+          streak_miss_count?: number
           total_words_added?: number
           total_words_mastered?: number
           last_activity_date?: string | null
@@ -50,6 +52,7 @@ export interface Database {
           subscription_transaction_id?: string | null
           streak_count?: number
           longest_streak?: number
+          streak_miss_count?: number
           total_words_added?: number
           total_words_mastered?: number
           last_activity_date?: string | null
@@ -184,6 +187,9 @@ export interface Database {
           translation: string
           meaning: string | null
           example_sentence: string | null
+          sentence_bold: string | null
+          sentence_meaning: string | null
+          meaning_bold: string | null
           notes: string | null
           current_round: number
           is_mastered: boolean
@@ -205,6 +211,9 @@ export interface Database {
           translation: string
           meaning?: string | null
           example_sentence?: string | null
+          sentence_bold?: string | null
+          sentence_meaning?: string | null
+          meaning_bold?: string | null
           notes?: string | null
           current_round?: number
           is_mastered?: boolean
@@ -226,6 +235,9 @@ export interface Database {
           translation?: string
           meaning?: string | null
           example_sentence?: string | null
+          sentence_bold?: string | null
+          sentence_meaning?: string | null
+          meaning_bold?: string | null
           notes?: string | null
           current_round?: number
           is_mastered?: boolean

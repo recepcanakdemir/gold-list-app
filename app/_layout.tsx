@@ -51,7 +51,7 @@ function AppWithTheme() {
             name="notebook/[id]/input" 
             options={{ 
               headerShown: false,
-              presentation: 'modal'
+              presentation: 'card'
             }} 
           />
           <Stack.Screen 
@@ -60,6 +60,13 @@ function AppWithTheme() {
               title: 'Review',
               headerShown: false,
               presentation: 'fullScreenModal'
+            }} 
+          />
+          <Stack.Screen 
+            name="word-save/index" 
+            options={{ 
+              headerShown: false,
+              presentation: 'card'
             }} 
           />
           <Stack.Screen 

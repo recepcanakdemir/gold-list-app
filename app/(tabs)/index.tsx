@@ -7,6 +7,7 @@ import {
   ScrollView,
   RefreshControl,
   Dimensions,
+  Alert,
 } from 'react-native'
 import CountryFlag from 'react-native-country-flag'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -28,7 +29,7 @@ import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
 
 export default function HomeScreen() {
   const router = useRouter()
-  const { profile } = useAuth()
+  const { profile, resetUserStreak } = useAuth()
   const { appState, refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { colors, isDark } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
@@ -986,6 +987,21 @@ export default function HomeScreen() {
     }
   }, [profile, appState.notebooks]) // Reload when notebooks change
 
+  const handleResetStreak = () => {
+    Alert.alert(
+      'Reset Streak',
+      'Reset streak to 0? This is for testing only.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Reset', 
+          style: 'destructive',
+          onPress: resetUserStreak
+        }
+      ]
+    )
+  }
+
   const getUserStats = () => {
     const streakDays = profile?.streak_count || 0
     const successRate = realWordStats.totalWords > 0 ? Math.round((realWordStats.masteredWords / realWordStats.totalWords) * 100) : 0
@@ -1137,7 +1153,17 @@ export default function HomeScreen() {
         <View style={styles.quickStats}>
           <View style={styles.statRow}>
             <View style={styles.quickStatCard}>
-              <Text style={styles.quickStatIcon}>🔥</Text>
+              <View style={styles.quickStatIconContainer}>
+                <Text style={styles.quickStatIcon}>🔥</Text>
+                {__DEV__ && (
+                  <TouchableOpacity
+                    style={styles.resetStreakButtonSmall}
+                    onPress={handleResetStreak}
+                  >
+                    <Text style={styles.resetStreakIconSmall}>🔄</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
               <View>
                 <Text style={styles.quickStatValue}>{stats.streakDays}</Text>
                 <Text style={styles.quickStatLabel}>Day Streak</Text>
@@ -1547,6 +1573,21 @@ const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
   quickStatIcon: {
     fontSize: TYPOGRAPHY.xl,
     marginRight: SPACING.md,
+  },
+  quickStatIconContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  resetStreakButtonSmall: {
+    marginLeft: -8,
+    marginRight: SPACING.xs,
+    padding: 2,
+    borderRadius: 8,
+    backgroundColor: colors.gray100,
+    opacity: 0.6,
+  },
+  resetStreakIconSmall: {
+    fontSize: 12,
   },
   quickStatValue: {
     fontSize: TYPOGRAPHY.lg,
