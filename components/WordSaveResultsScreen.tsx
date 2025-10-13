@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { LoadingIndicator } from '@/components/LoadingIndicator'
+import { StreakProgressDisplay } from '@/components/StreakProgressDisplay'
 import MaterialIcons from '@expo/vector-icons/MaterialIcons'
 
 interface SavedWord {
@@ -20,6 +21,8 @@ interface WordSaveResultsScreenProps {
   wordCount: number
   savedWords: SavedWord[]
   notebookTitle: string
+  currentStreak?: number
+  previousStreak?: number
   onClose: () => void
 }
 
@@ -27,7 +30,9 @@ export function WordSaveResultsScreen({
   isLoading,
   wordCount,
   savedWords, 
-  notebookTitle, 
+  notebookTitle,
+  currentStreak,
+  previousStreak,
   onClose 
 }: WordSaveResultsScreenProps) {
   const { colors } = useTheme()
@@ -94,6 +99,16 @@ export function WordSaveResultsScreen({
           <Text style={styles.reviewDate}>
             Next review: {getNextReviewDate()}
           </Text>
+          
+          {/* Streak Progress Display */}
+          {currentStreak !== undefined && (
+            <StreakProgressDisplay
+              currentStreak={currentStreak}
+              previousStreak={previousStreak}
+              showAnimation={true}
+              compact={true}
+            />
+          )}
         </View>
       </View>
 

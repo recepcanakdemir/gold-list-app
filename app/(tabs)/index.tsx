@@ -29,7 +29,7 @@ import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
 
 export default function HomeScreen() {
   const router = useRouter()
-  const { profile, resetUserStreak } = useAuth()
+  const { profile } = useAuth()
   const { appState, refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { colors, isDark } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
@@ -37,13 +37,13 @@ export default function HomeScreen() {
   const screenWidth = Dimensions.get('window').width
   const [currentCarouselPage, setCurrentCarouselPage] = useState(0)
   const [weekData, setWeekData] = useState([
-    { day: 'Mon', words: 0, completed: false },
-    { day: 'Tue', words: 0, completed: false },
-    { day: 'Wed', words: 0, completed: false },
-    { day: 'Thu', words: 0, completed: false },
-    { day: 'Fri', words: 0, completed: false },
-    { day: 'Sat', words: 0, completed: false },
-    { day: 'Sun', words: 0, completed: false },
+    { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Wed', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Thu', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Fri', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
   ])
   // Throttling and loading guards - use refs to avoid dependency issues
   const isLoadingProgressRef = useRef(false)
@@ -539,7 +539,7 @@ export default function HomeScreen() {
 
 
   const getTotalWordsThisWeek = () => {
-    return weekData.reduce((total, day) => total + day.words, 0)
+    return weekData.reduce((total, day) => total + day.wordsAdded, 0)
   }
 
   // Helper function to categorize notebooks by level
@@ -987,20 +987,6 @@ export default function HomeScreen() {
     }
   }, [profile, appState.notebooks]) // Reload when notebooks change
 
-  const handleResetStreak = () => {
-    Alert.alert(
-      'Reset Streak',
-      'Reset streak to 0? This is for testing only.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Reset', 
-          style: 'destructive',
-          onPress: resetUserStreak
-        }
-      ]
-    )
-  }
 
   const getUserStats = () => {
     const streakDays = profile?.streak_count || 0
@@ -1025,6 +1011,40 @@ export default function HomeScreen() {
     }
   }, [stats.totalWords, stats.masteredWords])
 
+  // Daily Progress Widget Component
+  const renderDailyProgressWidget = () => {
+    // Use real weekly data instead of dummy data
+    const dailyProgressData = weekData.map(day => ({
+      day: day.day,
+      added: day.wordsAdded, // Map from API format to widget format
+      completed: day.completed
+    }))
+
+    return (
+      <View style={styles.dailyProgressWidget}>
+        <Text style={styles.dailyProgressTitle}>This Week's Progress</Text>
+        <View style={styles.dailyProgressContainer}>
+          {dailyProgressData.map((day, index) => (
+            <View key={index} style={styles.dailyProgressItem}>
+              <Text style={styles.dailyProgressDay}>{day.day}</Text>
+              <View style={[
+                styles.dailyProgressIndicator,
+                { backgroundColor: day.completed ? colors.primary : colors.gray200 }
+              ]}>
+                <Text style={[
+                  styles.dailyProgressValue,
+                  { color: day.completed ? colors.cardBackground : colors.textSecondary }
+                ]}>
+                  {day.added}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+    )
+  }
+
   const styles = createStyles(colors, isDark)
 
   return (
@@ -1037,6 +1057,9 @@ export default function HomeScreen() {
       >
         {/* Header */}
         <SharedHeader title="Gold List" />
+        
+        {/* Daily Progress Widget */}
+        {renderDailyProgressWidget()}
         
         {/* Development Reset Button */}
         <TouchableOpacity 
@@ -1076,77 +1099,7 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Weekly Progress - Only show if user has notebooks */}
-        {appState.notebooks.length > 0 && (
-        <View style={styles.progressSection}>
-          <Text style={styles.progressTitle}>This Week&apos;s Progress</Text>
-          <Text style={styles.progressSubtitle}>Keep up the great work! 🎉</Text>
-          
-          <View style={styles.weekContainer}>
-            {weekData.map((day, index) => {
-              const maxWords = Math.max(...weekData.map(d => d.words))
-              const heightPercentage = maxWords > 0 ? (day.words / maxWords) * 100 : 0
-              
-              return (
-                <View key={day.day} style={styles.dayColumn}>
-                  <View style={styles.barContainer}>
-                    <View 
-                      style={[
-                        styles.progressBar,
-                        {
-                          height: `${Math.max(heightPercentage, 8)}%`,
-                          backgroundColor: day.completed ? colors.success : colors.gray200,
-                        }
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.dayLabel}>{day.day}</Text>
-                  <Text style={styles.wordCount}>{day.words}</Text>
-                </View>
-              )
-            })}
-          </View>
 
-          <View style={styles.progressSummary}>
-            <Text style={styles.summaryText}>
-              You&apos;ve added <Text style={styles.summaryHighlight}>{getTotalWordsThisWeek()} words</Text> this week
-            </Text>
-          </View>
-        </View>
-        )}
-
-        {/* Today's Goal - Only show if user has notebooks */}
-        {appState.notebooks.length > 0 && (
-        <View style={styles.goalSection}>
-          <View style={styles.goalCard}>
-            <View style={styles.goalHeader}>
-              <Text style={styles.goalTitle}>Today&apos;s Goal</Text>
-              <Text style={styles.goalEmoji}>🎯</Text>
-            </View>
-            
-            <View style={styles.goalProgress}>
-              <View style={styles.goalProgressBg}>
-                <View style={[styles.goalProgressFill, { width: `${Math.min((todayProgress.wordsAdded / todayProgress.goal) * 100, 100)}%` }]} />
-              </View>
-              <Text style={styles.goalProgressText}>
-                {todayProgress.wordsAdded} of {todayProgress.goal} words
-              </Text>
-            </View>
-            
-            <TouchableOpacity 
-              style={styles.addWordsButton}
-              onPress={() => handleAddWordsPress(`/notebook/${appState.notebooks[0]?.id}/input`)}
-              disabled={isAddWordsButtonLoading}
-            >
-              {isAddWordsButtonLoading ? (
-                <LoadingIndicator size={16} color={colors.cardBackground} />
-              ) : (
-                <Text style={styles.addWordsButtonText}>Add Words</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-        )}
 
         {/* Quick Stats - Only show if user has notebooks */}
         {appState.notebooks.length > 0 && (
@@ -1155,14 +1108,6 @@ export default function HomeScreen() {
             <View style={styles.quickStatCard}>
               <View style={styles.quickStatIconContainer}>
                 <Text style={styles.quickStatIcon}>🔥</Text>
-                {__DEV__ && (
-                  <TouchableOpacity
-                    style={styles.resetStreakButtonSmall}
-                    onPress={handleResetStreak}
-                  >
-                    <Text style={styles.resetStreakIconSmall}>🔄</Text>
-                  </TouchableOpacity>
-                )}
               </View>
               <View>
                 <Text style={styles.quickStatValue}>{stats.streakDays}</Text>
@@ -1577,17 +1522,6 @@ const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
   quickStatIconContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  resetStreakButtonSmall: {
-    marginLeft: -8,
-    marginRight: SPACING.xs,
-    padding: 2,
-    borderRadius: 8,
-    backgroundColor: colors.gray100,
-    opacity: 0.6,
-  },
-  resetStreakIconSmall: {
-    fontSize: 12,
   },
   quickStatValue: {
     fontSize: TYPOGRAPHY.lg,
@@ -2196,6 +2130,48 @@ const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
   },
   actionTextComplete: {
     color: isDark ? '#34D399' : '#059669',
+  },
+
+  // Daily Progress Widget Styles
+  dailyProgressWidget: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.md,
+    ...SHADOWS.sm,
+  },
+  dailyProgressTitle: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textPrimary,
+    marginBottom: SPACING.md,
+    textAlign: 'center',
+  },
+  dailyProgressContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dailyProgressItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  dailyProgressDay: {
+    fontSize: TYPOGRAPHY.xs,
+    color: colors.textSecondary,
+    marginBottom: SPACING.xs,
+  },
+  dailyProgressIndicator: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dailyProgressValue: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.bold,
   },
 
 })

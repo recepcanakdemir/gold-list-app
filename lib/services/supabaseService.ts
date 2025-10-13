@@ -541,6 +541,23 @@ class SupabaseService {
       }
 
       console.log(`✅ Successfully added ${words.length} words`)
+      
+      // Record streak activity (multi-notebook aware, prevents double-counting)
+      try {
+        await this.recordActivity(user.id, getCurrentDate())
+      } catch (streakError) {
+        console.error('Error recording streak activity:', streakError)
+        // Don't throw - streak tracking is non-critical
+      }
+      
+      // Update cached profile stats for social features
+      try {
+        await this.updateProfileStats(words.length, 0)
+      } catch (profileError) {
+        console.error('Error updating profile stats:', profileError)
+        // Don't throw - profile stats tracking is non-critical
+      }
+      
       return { success: true }
     }, `addWords(${pageId.slice(0, 8)}, ${words.length} words)`)
   }
@@ -764,26 +781,32 @@ class SupabaseService {
 
   async recordActivity(userId: string, currentDate?: Date): Promise<void> {
     // This function is called when user does a streak-worthy activity
-    await this.updateStreak(userId, true, currentDate)
+    // Implements smart daily activity checking to prevent double-counting
+    return withRetry(async () => {
+      const today = (currentDate || getCurrentDate()).toISOString().split('T')[0]
+      
+      // Check if user already has activity recorded for today
+      const { data: profile, error: fetchError } = await supabase
+        .from('profiles')
+        .select('last_activity_date')
+        .eq('id', userId)
+        .single()
+
+      if (fetchError) throw fetchError
+      if (!profile) throw new Error('Profile not found')
+
+      // If user already has activity today, don't double-count
+      if (profile.last_activity_date === today) {
+        console.log(`🔥 Activity already recorded for today (${today}), skipping duplicate`)
+        return
+      }
+
+      // Record activity and update streak
+      console.log(`🔥 Recording first activity of the day (${today}) - updating streak`)
+      await this.updateStreak(userId, true, currentDate)
+    }, 'recordActivity')
   }
 
-  async resetStreak(userId: string): Promise<void> {
-    return withRetry(async () => {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          streak_count: 0,
-          longest_streak: 0,
-          streak_miss_count: 0,
-          last_activity_date: null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', userId)
-      
-      if (error) throw error
-      console.log(`🔄 Streak reset for user ${userId.slice(0, 8)}`)
-    }, 'resetStreak')
-  }
 
   async getPages(notebookId: string): Promise<PageWithWords[]> {
     // Fetch actual pages from database with all context fields
@@ -1551,8 +1574,53 @@ class SupabaseService {
         }
       }
 
+      // Update profile statistics for mastered words
+      const masteredWordsCount = deduplicatedReviews.filter(r => r.remembered).length
+      if (masteredWordsCount > 0) {
+        console.log(`📊 Updating profile: ${masteredWordsCount} words mastered`)
+        try {
+          const { data: currentProfile } = await supabase
+            .from('user_profiles')
+            .select('total_words_mastered')
+            .eq('user_id', user.id)
+            .single()
+
+          await supabase
+            .from('user_profiles')
+            .update({
+              total_words_mastered: (currentProfile?.total_words_mastered || 0) + masteredWordsCount,
+              updated_at: new Date().toISOString()
+            })
+            .eq('user_id', user.id)
+        } catch (profileError) {
+          console.error('Failed to update profile mastered words count:', profileError)
+          // Don't throw - mastery tracking is non-critical
+        }
+      }
+
+      // Record streak activity for review session (multi-notebook aware, prevents double-counting)
+      if (deduplicatedReviews.length > 0) {
+        try {
+          await this.recordActivity(user.id, getCurrentDate())
+        } catch (streakError) {
+          console.error('Error recording streak activity:', streakError)
+          // Don't throw - streak tracking is non-critical
+        }
+      }
+
       // After all reviews are processed, check for Silver/Gold progression
       const progressionResults = await this.checkNotebookProgressions(reviews)
+      
+      // Update cached profile stats for social features
+      try {
+        const masteredCount = reviews.filter(r => r.remembered).length
+        if (masteredCount > 0) {
+          await this.updateProfileStats(0, masteredCount)
+        }
+      } catch (profileError) {
+        console.error('Error updating profile stats:', profileError)
+        // Don't throw - profile stats tracking is non-critical
+      }
       
       console.log(`✅ Batch review completed: ${reviews.length} words processed`)
       return { 
@@ -1576,9 +1644,183 @@ class SupabaseService {
     // Simplified - do nothing for now
   }
 
-  async getWeeklyProgress(): Promise<DailyProgress[]> {
-    // Return empty array for now
-    return []
+  async getWeeklyProgress(): Promise<{ day: string; wordsAdded: number; wordsRemembered: number; completed: boolean }[]> {
+    return withRetry(async () => {
+      // Get last 7 days of daily progress
+      const dailyProgress = await this.getDailyProgress(7)
+      
+      // Convert to the format expected by dashboard
+      const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+      const result = []
+      
+      // Generate rolling 7-day window ending with TODAY (rightmost)
+      const currentDate = getCurrentDate()
+      for (let i = 6; i >= 0; i--) {
+        const date = new Date(currentDate)
+        date.setDate(date.getDate() - i)
+        const dayName = weekDays[date.getDay()]
+        const dateStr = date.toISOString().split('T')[0]
+        
+        // Find matching daily progress data
+        const dayData = dailyProgress.find(d => d.date === dateStr)
+        const wordsAdded = dayData?.wordsAdded || 0
+        const wordsRemembered = dayData?.wordsRemembered || 0
+        
+        result.push({
+          day: dayName,
+          wordsAdded: wordsAdded,
+          wordsRemembered: wordsRemembered,
+          completed: wordsAdded > 0 // Consider completed if any words were added
+        })
+      }
+      
+      console.log(`📊 Generated rolling 7-day window: ${result.map(r => r.day).join('-')} (TODAY: ${result[result.length - 1].day})`)
+      return result
+      
+    }, 'getWeeklyProgress')
+  }
+
+  async getMonthlyProgress(): Promise<{ month: string; wordsAdded: number; wordsMastered: number }[]> {
+    return withRetry(async () => {
+      // Get last 7 months of daily progress (approximately 210 days)
+      const dailyProgress = await this.getDailyProgress(210)
+      
+      // Group data by month
+      const monthlyStats: { [key: string]: { wordsAdded: number; wordsMastered: number } } = {}
+      
+      dailyProgress.forEach(day => {
+        const date = new Date(day.date)
+        const monthKey = date.toISOString().substring(0, 7) // YYYY-MM format
+        
+        if (!monthlyStats[monthKey]) {
+          monthlyStats[monthKey] = { wordsAdded: 0, wordsMastered: 0 }
+        }
+        
+        monthlyStats[monthKey].wordsAdded += day.wordsAdded
+        monthlyStats[monthKey].wordsMastered += day.wordsRemembered
+      })
+      
+      // Convert to array and get last 7 months
+      const currentDate = getCurrentDate()
+      const result = []
+      
+      for (let i = 6; i >= 0; i--) {
+        const date = new Date(currentDate)
+        date.setMonth(date.getMonth() - i)
+        const monthKey = date.toISOString().substring(0, 7)
+        const monthName = date.toLocaleDateString('en-US', { month: 'short' })
+        
+        const monthData = monthlyStats[monthKey] || { wordsAdded: 0, wordsMastered: 0 }
+        
+        result.push({
+          month: monthName,
+          wordsAdded: monthData.wordsAdded,
+          wordsMastered: monthData.wordsMastered
+        })
+      }
+      
+      console.log(`📊 Generated monthly progress for 7 months`)
+      return result
+      
+    }, 'getMonthlyProgress')
+  }
+
+  // Get real-time total words statistics from database
+  async getTotalWordsStats(): Promise<{ totalAdded: number; totalMastered: number }> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return { totalAdded: 0, totalMastered: 0 }
+
+      // Get user's notebook IDs
+      const { data: notebooks } = await supabase
+        .from('notebooks')
+        .select('id')
+        .eq('user_id', user.id)
+
+      if (!notebooks || notebooks.length === 0) {
+        return { totalAdded: 0, totalMastered: 0 }
+      }
+
+      const notebookIds = notebooks.map(n => n.id)
+
+      // Count total words added and mastered in parallel
+      const [totalWordsResult, masteredWordsResult] = await Promise.all([
+        supabase
+          .from('words')
+          .select('id', { count: 'exact', head: true })
+          .in('notebook_id', notebookIds),
+        supabase
+          .from('words')
+          .select('id', { count: 'exact', head: true })
+          .in('notebook_id', notebookIds)
+          .eq('is_mastered', true)
+      ])
+
+      const totalAdded = totalWordsResult.count || 0
+      const totalMastered = masteredWordsResult.count || 0
+
+      console.log(`📊 Real-time stats: ${totalAdded} total words, ${totalMastered} mastered`)
+      return { totalAdded, totalMastered }
+    }, 'getTotalWordsStats')
+  }
+
+  async updateProfileStats(deltaAdded: number = 0, deltaMastered: number = 0): Promise<void> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      console.log(`📊 Updating profile stats: +${deltaAdded} added, +${deltaMastered} mastered`)
+
+      // Get current profile stats first
+      const { data: profile, error: selectError } = await supabase
+        .from('profiles')
+        .select('total_words_added, total_words_mastered')
+        .eq('id', user.id)
+        .single()
+
+      if (selectError) throw selectError
+      if (!profile) throw new Error('Profile not found')
+
+      // Calculate new values
+      const newTotalAdded = (profile.total_words_added || 0) + deltaAdded
+      const newTotalMastered = (profile.total_words_mastered || 0) + deltaMastered
+
+      // Update with new calculated values
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          total_words_added: newTotalAdded,
+          total_words_mastered: newTotalMastered
+        })
+        .eq('id', user.id)
+
+      if (error) throw error
+      console.log(`✅ Profile stats updated: ${newTotalAdded} total added, ${newTotalMastered} total mastered`)
+    }, 'updateProfileStats')
+  }
+
+  async syncProfileStats(): Promise<void> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      console.log(`🔄 Syncing profile stats with database reality...`)
+
+      // Get real-time stats from the words table
+      const realStats = await this.getTotalWordsStats()
+      
+      // Update the profile table to match reality
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          total_words_added: realStats.totalAdded,
+          total_words_mastered: realStats.totalMastered
+        })
+        .eq('id', user.id)
+
+      if (error) throw error
+      console.log(`✅ Profile stats synced: ${realStats.totalAdded} added, ${realStats.totalMastered} mastered`)
+    }, 'syncProfileStats')
   }
 
   async getTodayProgress(): Promise<{ wordsAdded: number; goal: number; completed: boolean }> {
@@ -1628,8 +1870,146 @@ class SupabaseService {
   }
 
   async getDailyProgress(days: number): Promise<DailyProgress[]> {
-    // Return empty array for now
-    return []
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return []
+
+      const currentDate = getCurrentDate()
+      
+      // Generate date range for the requested number of days
+      const dailyStats: { [key: string]: DailyProgress } = {}
+
+      console.log(`📊 Getting daily progress for ${days} days using page-level data`)
+
+      // Initialize all days with zero values
+      for (let i = 0; i < days; i++) {
+        const date = new Date(currentDate)
+        date.setDate(date.getDate() - (days - 1 - i)) // Start from oldest day
+        const dateStr = date.toISOString().split('T')[0]
+        
+        dailyStats[dateStr] = {
+          date: dateStr,
+          wordsAdded: 0,
+          wordsReviewed: 0,
+          wordsRemembered: 0,
+          wordsForgotten: 0,
+          sessionDurationMinutes: 0
+        }
+      }
+
+      // Get all pages created within the date range (like getTodayProgress does)
+      const startDateStr = Object.keys(dailyStats)[0] // First date in range
+      const endDateStr = Object.keys(dailyStats)[Object.keys(dailyStats).length - 1] // Last date in range
+
+      const { data: pages, error: pagesError } = await supabase
+        .from('pages')
+        .select(`
+          date_created,
+          words_count,
+          notebook:notebooks!notebook_id(user_id)
+        `)
+        .eq('notebooks.user_id', user.id)
+        .gte('date_created', startDateStr)
+        .lte('date_created', endDateStr)
+
+      if (pagesError) {
+        console.error('Error fetching pages data:', pagesError)
+        return Object.values(dailyStats)
+      }
+
+      // Sum up words added from pages by date_created
+      pages?.forEach(page => {
+        const dateStr = page.date_created
+        if (dailyStats[dateStr]) {
+          dailyStats[dateStr].wordsAdded += page.words_count || 0
+        }
+      })
+
+      // Get ALL review data within the date range (not limited to specific pages)
+      // This captures all review activity regardless of when words were originally added
+      const { data: allUserWords } = await supabase
+        .from('words')
+        .select('id, notebook_id')
+        .in('notebook_id', (await supabase
+          .from('notebooks')
+          .select('id')
+          .eq('user_id', user.id)
+        ).data?.map(n => n.id) || [])
+
+      if (allUserWords && allUserWords.length > 0) {
+        const allWordIds = allUserWords.map(w => w.id)
+        
+        // Query ALL reviews for user's words within the date range
+        const { data: reviewsData, error: reviewsError } = await supabase
+          .from('reviews')
+          .select('reviewed_at, remembered')
+          .in('word_id', allWordIds)
+          .gte('reviewed_at', startDateStr)
+          .lte('reviewed_at', endDateStr + 'T23:59:59.999Z')
+
+        if (!reviewsError && reviewsData) {
+          console.log(`📊 Found ${reviewsData.length} reviews in date range`)
+          
+          // Count review activities
+          reviewsData.forEach(review => {
+            const dateStr = review.reviewed_at.split('T')[0]
+            if (dailyStats[dateStr]) {
+              dailyStats[dateStr].wordsReviewed++
+              if (review.remembered) {
+                dailyStats[dateStr].wordsRemembered++
+              } else {
+                dailyStats[dateStr].wordsForgotten++
+              }
+            }
+          })
+        } else if (reviewsError) {
+          console.error('Error fetching reviews data:', reviewsError)
+        }
+
+        // Also get mastered words from words table (when is_mastered = true, last_reviewed = mastery date)
+        const { data: userNotebooks } = await supabase
+          .from('notebooks')
+          .select('id')
+          .eq('user_id', user.id)
+
+        if (userNotebooks && userNotebooks.length > 0) {
+          const notebookIds = userNotebooks.map(n => n.id)
+          
+          const { data: masteredWords, error: masteredError } = await supabase
+            .from('words')
+            .select('last_reviewed')
+            .in('notebook_id', notebookIds)
+            .eq('is_mastered', true)
+            .gte('last_reviewed', startDateStr)
+            .lte('last_reviewed', endDateStr + 'T23:59:59.999Z')
+
+          if (!masteredError && masteredWords) {
+            console.log(`📊 Found ${masteredWords.length} mastered words in date range`)
+            
+            // Count mastered words by their last_reviewed date (which is their mastery date)
+            masteredWords.forEach(word => {
+              const dateStr = word.last_reviewed.split('T')[0]
+              if (dailyStats[dateStr]) {
+                dailyStats[dateStr].wordsRemembered++
+                dailyStats[dateStr].wordsReviewed++
+              }
+            })
+          } else if (masteredError) {
+            console.error('Error fetching mastered words data:', masteredError)
+          }
+        }
+      }
+
+      // Convert to array and sort by date (newest first)
+      const result = Object.values(dailyStats).sort((a, b) => 
+        new Date(b.date).getTime() - new Date(a.date).getTime()
+      )
+
+      console.log(`📊 Generated daily progress for ${result.length} days using page-level data`)
+      console.log(`📊 Sample daily stats:`, result.slice(0, 3))
+      return result
+
+    }, 'getDailyProgress')
   }
 
   async getTotalWordsCount(): Promise<number> {
@@ -2380,6 +2760,55 @@ class SupabaseService {
 
       return data?.context_title || null
     }, 'getPageContext')
+  }
+
+  // =============================================
+  // TESTING & DEVELOPMENT
+  // =============================================
+
+  async resetUserData(userId: string): Promise<void> {
+    return withRetry(async () => {
+      console.log(`🧹 Starting complete user data reset for user ${userId.slice(0, 8)}...`)
+      
+      // 1. Get all user's notebooks
+      const { data: notebooks, error: notebooksError } = await supabase
+        .from('notebooks')
+        .select('id')
+        .eq('user_id', userId)
+
+      if (notebooksError) {
+        throw new Error(`Failed to get user notebooks: ${notebooksError.message}`)
+      }
+
+      // 2. Delete all notebooks (this will cascade to delete pages, words, and reviews)
+      for (const notebook of notebooks || []) {
+        await this.deleteNotebook(notebook.id)
+        console.log(`🗑️ Deleted notebook ${notebook.id}`)
+      }
+
+      // 3. Reset all profile counters to zero
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          streak_count: 0,
+          longest_streak: 0,
+          streak_miss_count: 0,
+          total_words_added: 0,
+          total_words_mastered: 0,
+          last_activity_date: null
+        })
+        .eq('id', userId)
+
+      if (profileError) {
+        throw new Error(`Failed to reset profile: ${profileError.message}`)
+      }
+
+      // 4. Clear all caches to ensure fresh state
+      this.clearCache()
+      this.clearAuthCache()
+      
+      console.log(`✅ Complete user data reset completed for user ${userId.slice(0, 8)}`)
+    }, 'resetUserData')
   }
 }
 

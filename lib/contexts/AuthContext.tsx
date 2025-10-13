@@ -20,7 +20,6 @@ interface AuthContextType {
   getStreakStatus: () => Promise<{streak_count: number, days_missed: number, is_at_risk: boolean} | null>
   recordUserActivity: () => Promise<void>
   validateDailyStreak: (currentDate?: Date) => Promise<void>
-  resetUserStreak: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -341,16 +340,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     console.log(`🔥 AuthContext: No user session found after ${maxRetries} attempts, skipping validation`)
   }
 
-  async function resetUserStreak() {
-    if (!session?.user?.id) return
-    
-    try {
-      await supabaseService.resetStreak(session.user.id)
-      await refreshProfile()
-    } catch (error) {
-      console.error('Error resetting streak:', error)
-    }
-  }
 
   const value: AuthContextType = {
     session,
@@ -367,7 +356,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     getStreakStatus: getUserStreakStatus,
     recordUserActivity,
     validateDailyStreak,
-    resetUserStreak,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

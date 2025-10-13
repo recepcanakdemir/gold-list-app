@@ -158,7 +158,9 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
 
   const getCurrentDate = (): Date => {
     if (!isSimulationActive) {
-      return new Date()
+      const realDate = new Date()
+      console.log(`🕰️ DevTime: Using real date: ${realDate.toISOString()}`)
+      return realDate
     }
     
     // Calculate simulation date based on start time and current day
@@ -172,7 +174,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     const dayOffset = currentSimulatedDay
     simulatedDate.setDate(simulatedDate.getDate() + dayOffset)
     
-    // Debug logging disabled to prevent spam
+    console.log(`🕰️ DevTime: Simulation active, day ${currentSimulatedDay}, returning: ${simulatedDate.toISOString()}`)
     
     return simulatedDate
   }

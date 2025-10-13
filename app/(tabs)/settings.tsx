@@ -14,14 +14,16 @@ import { useApp } from '@/lib/contexts/AppContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { SharedHeader } from '@/components/shared-header'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
+import { supabaseService } from '@/lib/services/supabaseService'
 
 export default function SettingsScreen() {
   const router = useRouter()
   const { signOut, profile } = useAuth()
-  const { settings, updateSettings } = useApp()
+  const { settings, updateSettings, refreshData } = useApp()
   const { colors, toggleTheme, isDark } = useTheme()
   
   const [localSettings, setLocalSettings] = useState(settings)
+  const [isResetting, setIsResetting] = useState(false)
 
   const handleSaveSettings = async () => {
     try {
@@ -52,6 +54,46 @@ export default function SettingsScreen() {
 
   const updateLocalSetting = (key: keyof typeof localSettings, value: any) => {
     setLocalSettings(prev => ({ ...prev, [key]: value }))
+  }
+
+  const handleResetUserData = async () => {
+    Alert.alert(
+      'Reset All Data',
+      '⚠️ This will permanently delete ALL your data including:\n\n• All notebooks and words\n• Learning progress and statistics\n• Streak counters and activity\n\nThis action cannot be undone!',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset All Data',
+          style: 'destructive',
+          onPress: async () => {
+            setIsResetting(true)
+            try {
+              if (!profile?.id) {
+                throw new Error('User not found')
+              }
+              
+              await supabaseService.resetUserData(profile.id)
+              await refreshData?.()
+              
+              Alert.alert(
+                'Success',
+                'All user data has been reset successfully. The app will refresh to show the clean state.',
+                [{ text: 'OK' }]
+              )
+            } catch (error) {
+              console.error('Reset error:', error)
+              Alert.alert(
+                'Error',
+                'Failed to reset user data. Please try again.',
+                [{ text: 'OK' }]
+              )
+            } finally {
+              setIsResetting(false)
+            }
+          }
+        }
+      ]
+    )
   }
 
   const styles = createStyles(colors)
@@ -174,6 +216,30 @@ export default function SettingsScreen() {
                 thumbColor={localSettings.enableHapticFeedback ? colors.primary : colors.gray400}
               />
             </View>
+          </View>
+        </View>
+
+        {/* Testing & Development */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Testing & Development</Text>
+          
+          <View style={styles.settingCard}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Reset All Data</Text>
+                <Text style={styles.settingDescription}>Delete all notebooks, words, and progress for testing</Text>
+              </View>
+            </View>
+            
+            <TouchableOpacity 
+              style={[styles.resetButton, isResetting && styles.resetButtonDisabled]} 
+              onPress={handleResetUserData}
+              disabled={isResetting}
+            >
+              <Text style={styles.resetButtonText}>
+                {isResetting ? 'Resetting...' : 'Reset All Data'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -308,6 +374,24 @@ const createStyles = (colors: any) => StyleSheet.create({
     ...SHADOWS.sm,
   },
   signOutButtonText: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.background,
+  },
+  resetButton: {
+    backgroundColor: colors.error,
+    marginHorizontal: SPACING.xl,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    alignItems: 'center' as const,
+    marginTop: SPACING.md,
+    ...SHADOWS.sm,
+  },
+  resetButtonDisabled: {
+    backgroundColor: colors.gray400,
+    opacity: 0.6,
+  },
+  resetButtonText: {
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.background,

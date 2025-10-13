@@ -200,18 +200,11 @@ Deno.serve(async (req: Request) => {
 
     console.log(`✅ Generated text: ${generatedText}`)
 
-    // Parse the generated response for dual versions with more robust regex
-    const sentenceMatch = generatedText.match(/SENTENCE:\s*(.+?)(?=\n|SENTENCE_BOLD|MEANING|$)/is)
-    const sentenceBoldMatch = generatedText.match(/SENTENCE_BOLD:\s*(.+?)(?=\n|MEANING|$)/is)
-    const meaningMatch = generatedText.match(/MEANING:\s*(.+?)(?=\n|MEANING_BOLD|$)/is)
-    const meaningBoldMatch = generatedText.match(/MEANING_BOLD:\s*(.+?)(?=\n|$)/is)
-    
-    // Debug logging for regex matches
-    console.log(`🔍 PARSING DEBUG:`)
-    console.log(`  - sentenceMatch: ${sentenceMatch ? sentenceMatch[1] : 'NULL'}`)
-    console.log(`  - sentenceBoldMatch: ${sentenceBoldMatch ? sentenceBoldMatch[1] : 'NULL'}`)
-    console.log(`  - meaningMatch: ${meaningMatch ? meaningMatch[1] : 'NULL'}`)
-    console.log(`  - meaningBoldMatch: ${meaningBoldMatch ? meaningBoldMatch[1] : 'NULL'}`)
+    // Parse the generated response for dual versions
+    const sentenceMatch = generatedText.match(/SENTENCE:\s*(.+?)(?=\n|$)/i)
+    const sentenceBoldMatch = generatedText.match(/SENTENCE_BOLD:\s*(.+?)(?=\n|$)/i)
+    const meaningMatch = generatedText.match(/MEANING:\s*(.+?)(?=\n|$)/i)
+    const meaningBoldMatch = generatedText.match(/MEANING_BOLD:\s*(.+?)(?=\n|$)/i)
     
     // Extract clean versions and ensure they don't contain any markers
     const sentence = (sentenceMatch?.[1]?.trim() || `${requestData.word} is used in this example sentence.`).replace(/\*\*(.*?)\*\*/g, '$1').replace(/<b>(.*?)<\/b>/g, '$1')
@@ -239,7 +232,6 @@ Deno.serve(async (req: Request) => {
     }
 
     console.log(`🎉 Successfully generated sentence with meaning, context=${contextUsed}`)
-    console.log(`📦 FINAL RESPONSE DATA:`, JSON.stringify(responseData, null, 2))
 
     return new Response(
       JSON.stringify(responseData),

@@ -1,49 +1,147 @@
-import React, { useEffect, useState } from 'react'
+import { SharedHeader } from '@/components/shared-header'
+import { RADIUS, SHADOWS, SPACING, TYPOGRAPHY } from '@/lib/constants/design'
+import { useApp } from '@/lib/contexts/AppContext'
+import { useAuth } from '@/lib/contexts/AuthContext'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
+import { useTheme } from '@/lib/contexts/ThemeContext'
+import { supabaseService } from '@/lib/services/supabaseService'
+import { DailyProgress } from '@/lib/types/goldlist'
+import { useRouter } from 'expo-router'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
-  View,
+  Dimensions,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Dimensions,
-  Alert,
+  View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter } from 'expo-router'
-import { useAuth } from '@/lib/contexts/AuthContext'
-import { useApp } from '@/lib/contexts/AppContext'
-import { supabaseService } from '@/lib/services/supabaseService'
-import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
-import { useTheme } from '@/lib/contexts/ThemeContext'
-import { useDevTime } from '@/lib/contexts/DevTimeContext'
-import { SharedHeader } from '@/components/shared-header'
+import Svg, { Circle } from 'react-native-svg'
 
 const { width: screenWidth } = Dimensions.get('window')
 
+// Circular Progress Component
+interface CircularProgressProps {
+  percentage: number
+  color: string
+  size: number
+  strokeWidth: number
+  title: string
+  subtitle: string
+}
+
+function CircularProgress({ percentage, color, size, strokeWidth, title, subtitle }: CircularProgressProps) {
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const strokeDasharray = circumference
+  const strokeDashoffset = circumference - (percentage / 100) * circumference
+
+  return (
+    <View style={{ alignItems: 'center' }}>
+      <View style={{ position: 'relative' }}>
+        <Svg width={size} height={size}>
+          {/* Background circle */}
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke="#f0f0f0"
+            strokeWidth={strokeWidth}
+            fill="transparent"
+          />
+          {/* Progress circle */}
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke={color}
+            strokeWidth={strokeWidth}
+            fill="transparent"
+            strokeDasharray={strokeDasharray}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          />
+        </Svg>
+        {/* Percentage text in center */}
+        <View style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          justifyContent: 'center',
+          alignItems: 'center'
+        }}>
+          <Text style={{
+            fontSize: 20,
+            fontWeight: 'bold',
+            color: color
+          }}>
+            {percentage}%
+          </Text>
+        </View>
+      </View>
+      {/* Labels */}
+      <Text style={{
+        fontSize: 14,
+        fontWeight: '600',
+        marginTop: 8,
+        textAlign: 'center'
+      }}>
+        {title}
+      </Text>
+      <Text style={{
+        fontSize: 12,
+        color: '#666',
+        marginTop: 2,
+        textAlign: 'center'
+      }}>
+        {subtitle}
+      </Text>
+    </View>
+  )
+}
+
 export default function DashboardScreen() {
   const router = useRouter()
-  const { profile, resetUserStreak } = useAuth()
+  const { profile } = useAuth()
   const { appState, refreshNotebooks } = useApp()
   const { colors } = useTheme()
-  const { currentSimulatedDay } = useDevTime()
+  const { currentSimulatedDay, getCurrentDate } = useDevTime()
   const [refreshing, setRefreshing] = useState(false)
-  const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'year'>('week')
+  const [selectedChartPeriod, setSelectedChartPeriod] = useState<'week' | 'month'>('week')
+  const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month'>('week')
   const [currentPage, setCurrentPage] = useState(0)
   const [weeklyData, setWeeklyData] = useState([
-    { day: 'Mon', words: 0, completed: false },
-    { day: 'Tue', words: 0, completed: false },
-    { day: 'Wed', words: 0, completed: false },
-    { day: 'Thu', words: 0, completed: false },
-    { day: 'Fri', words: 0, completed: false },
-    { day: 'Sat', words: 0, completed: false },
-    { day: 'Sun', words: 0, completed: false },
+    { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Wed', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Thu', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Fri', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
+  ])
+  const [monthlyData, setMonthlyData] = useState<{ month: string; wordsAdded: number; wordsMastered: number }[]>([
+    { month: 'Apr', wordsAdded: 0, wordsMastered: 0 },
+    { month: 'May', wordsAdded: 0, wordsMastered: 0 },
+    { month: 'Jun', wordsAdded: 0, wordsMastered: 0 },
+    { month: 'Jul', wordsAdded: 0, wordsMastered: 0 },
+    { month: 'Aug', wordsAdded: 0, wordsMastered: 0 },
+    { month: 'Sep', wordsAdded: 0, wordsMastered: 0 },
+    { month: 'Oct', wordsAdded: 0, wordsMastered: 0 },
   ])
   const [activityData, setActivityData] = useState<number[][]>([])
   const [todayProgress, setTodayProgress] = useState({
     wordsAdded: 0,
     goal: 20,
     completed: false
+  })
+  const [totalWordsStats, setTotalWordsStats] = useState({
+    totalAdded: 0,
+    totalMastered: 0
   })
   const insets = useSafeAreaInsets()
 
@@ -65,58 +163,98 @@ export default function DashboardScreen() {
     }
     
     try {
-      const [weekly, today, dailyProgress] = await Promise.all([
+      console.log(`🔍 Dashboard Debug: Loading data with simulation day ${currentSimulatedDay}`)
+      
+      const [weekly, today, dailyProgress, monthly, totalStats] = await Promise.all([
         supabaseService.getWeeklyProgress(),
         supabaseService.getTodayProgress(),
-        supabaseService.getDailyProgress(25 * 7) // Get last ~6 months for heatmap
+        supabaseService.getDailyProgress(25 * 7), // Get last ~6 months for heatmap
+        supabaseService.getMonthlyProgress(), // Get last 7 months for chart
+        supabaseService.getTotalWordsStats() // Get real-time total words stats
       ])
+      
+      console.log(`🔍 Dashboard Debug: Weekly data received:`, weekly)
+      console.log(`🔍 Dashboard Debug: Today progress:`, today)
+      console.log(`🔍 Dashboard Debug: Total words stats:`, totalStats)
       
       setWeeklyData(weekly)
       setTodayProgress(today)
+      setMonthlyData(monthly)
+      setTotalWordsStats(totalStats)
       
       // Generate activity heatmap from daily progress data
       const heatmapData = generateRealHeatmap(dailyProgress)
       setActivityData(heatmapData)
+      
+      // One-time sync of profile stats to fix any inconsistencies
+      try {
+        if (profile?.total_words_added === 0 && profile?.total_words_mastered === 0 && totalStats.totalAdded > 0) {
+          console.log('🔄 Syncing profile stats to fix cached values...')
+          await supabaseService.syncProfileStats()
+        }
+      } catch (syncError) {
+        console.warn('Profile sync failed (non-critical):', syncError)
+      }
     } catch (error) {
       console.error('Error loading dashboard data:', error)
       // Keep default empty data if there's an error
     }
   }
 
-  const generateRealHeatmap = (dailyProgress: {
-    date: string
-    wordsAdded: number
-    wordsReviewed: number
-    accuracy: number
-  }[]) => {
-    const rows = 7
-    const cols = 25
-    const heatmapData = []
+  const generateRealHeatmap = (dailyProgress: DailyProgress[]) => {
+    const rows = 7 // Days of week (Sunday = 0, Monday = 1, ..., Saturday = 6)
+    const cols = 25 // Weeks to show (~6 months)
     
-    // Initialize with empty data
-    for (let row = 0; row < rows; row++) {
-      const rowData = []
-      for (let col = 0; col < cols; col++) {
-        rowData.push(0)
-      }
-      heatmapData.push(rowData)
-    }
+    // Initialize with empty data (7 rows × 25 columns)
+    const heatmapData = Array.from({ length: rows }, () => Array(cols).fill(0))
     
     // Fill with real data if available
     if (dailyProgress && dailyProgress.length > 0) {
-      dailyProgress.forEach((day, index) => {
-        if (index < rows * cols) {
-          const row = index % rows
-          const col = Math.floor(index / rows)
-          if (col < cols) {
-            // Convert words added to intensity (0-4)
-            const intensity = Math.min(4, Math.floor(day.wordsAdded / 5)) // 5 words = 1 intensity level
-            heatmapData[row][col] = intensity
+      const currentDate = getCurrentDate()
+      
+      // Calculate the start of the current week (Sunday)
+      const currentWeekStart = new Date(currentDate)
+      currentWeekStart.setUTCDate(currentDate.getUTCDate() - currentDate.getUTCDay())
+      currentWeekStart.setUTCHours(0, 0, 0, 0)
+      
+      // Calculate how many weeks have passed since a reference point
+      // This creates the "shifting" effect - each week, everything moves left by 1 column
+      const epochStart = new Date('2024-01-01T00:00:00.000Z') // Reference point
+      const weeksFromEpoch = Math.floor((currentWeekStart.getTime() - epochStart.getTime()) / (7 * 24 * 60 * 60 * 1000))
+      
+      // Process each day's progress
+      dailyProgress.forEach((day) => {
+        // Parse the date from the daily progress
+        const dayDate = new Date(day.date + 'T00:00:00.000Z') // Ensure UTC parsing
+        
+        // Calculate which week this day belongs to
+        const dayWeekStart = new Date(dayDate)
+        dayWeekStart.setUTCDate(dayDate.getUTCDate() - dayDate.getUTCDay())
+        dayWeekStart.setUTCHours(0, 0, 0, 0)
+        
+        const dayWeeksFromEpoch = Math.floor((dayWeekStart.getTime() - epochStart.getTime()) / (7 * 24 * 60 * 60 * 1000))
+        
+        // Calculate column position with GitHub-style shifting
+        // Current week appears in rightmost column (24)
+        // Each week shifts everything left by 1 column
+        const weeksFromCurrentWeek = weeksFromEpoch - dayWeeksFromEpoch
+        const col = cols - 1 - weeksFromCurrentWeek // Rightmost = current week
+        
+        // Only show days within our 25-week window
+        if (col >= 0 && col < cols) {
+          const dayOfWeek = dayDate.getUTCDay() // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+          const row = dayOfWeek
+          
+          if (row >= 0 && row < rows) {
+            // Binary: 1 if any words added, 0 if no activity
+            const isActive = day.wordsAdded > 0 ? 1 : 0
+            heatmapData[row][col] = isActive
           }
         }
       })
     }
     
+    console.log('🗓️ Generated GitHub-style shifting heatmap with weekly progression')
     return heatmapData
   }
 
@@ -129,75 +267,163 @@ export default function DashboardScreen() {
     setRefreshing(false)
   }
 
-  const handleResetStreak = () => {
-    Alert.alert(
-      'Reset Streak',
-      'Reset streak to 0? This is for testing only.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Reset', 
-          style: 'destructive',
-          onPress: resetUserStreak
-        }
+
+  // Gold List Method metrics - realistic dummy data
+  const goldListMetrics = {
+    currentStreak: 12,
+    masteryRate: 73,
+    weeklyVelocity: 15,
+    reviewAdherence: 85,
+    // 7 weeks × 7 days heatmap data (0 = no activity, 4 = high activity)
+    heatmapData: [
+      [1, 2, 3, 2, 1, 0, 0], // 7 weeks ago
+      [2, 3, 4, 3, 2, 1, 0], // 6 weeks ago
+      [1, 1, 2, 3, 3, 0, 1], // 5 weeks ago
+      [3, 4, 2, 1, 2, 0, 0], // 4 weeks ago
+      [2, 3, 3, 4, 3, 1, 1], // 3 weeks ago
+      [4, 3, 2, 3, 4, 0, 0], // 2 weeks ago
+      [3, 4, 4, 3, 3, 2, 1], // Last week
+    ],
+    // This week specific data
+    thisWeekData: {
+      wordsAdded: 45,
+      wordsReviewed: 28,
+      sessionsCompleted: 5,
+      averageSessionTime: 18, // minutes
+      dailyProgress: [
+        { day: 'Mon', added: 8, reviewed: 5, completed: true },
+        { day: 'Tue', added: 10, reviewed: 6, completed: true },
+        { day: 'Wed', added: 6, reviewed: 4, completed: true },
+        { day: 'Thu', added: 12, reviewed: 7, completed: true },
+        { day: 'Fri', added: 9, reviewed: 6, completed: true },
+        { day: 'Sat', added: 0, reviewed: 0, completed: false },
+        { day: 'Sun', added: 0, reviewed: 0, completed: false },
       ]
-    )
+    }
   }
 
-  // Performance data using real stats
-  const getPerformanceData = () => {
-    const totalWordsAdded = profile?.total_words_added || 0
-    const weeklyTotal = weeklyData.reduce((total, day) => total + day.words, 0)
+  // Circular progress data calculations with proper calendar periods
+  const getCircularProgressData = useMemo(() => {
+    const currentDate = getCurrentDate()
+    // Calculate total daily goal by summing all notebooks' daily targets
+    const totalDailyGoal = appState.notebooks.length > 0 
+      ? appState.notebooks.reduce((sum, notebook) => sum + (notebook.words_per_day || 0), 0)
+      : 10
+    
+    console.log(`📊 Multi-notebook goal calculation: ${appState.notebooks.length} notebooks, ${totalDailyGoal} words/day total`)
+    
+    // All-time mastery rate using real-time data (constant, unaffected by week/month toggle)
+    const totalWordsAdded = totalWordsStats.totalAdded > 0 ? totalWordsStats.totalAdded : (profile?.total_words_added || 0)
+    const totalWordsMastered = totalWordsStats.totalMastered > 0 ? totalWordsStats.totalMastered : (profile?.total_words_mastered || 0)
+    const masteryRate = totalWordsAdded > 0 ? Math.round((totalWordsMastered / totalWordsAdded) * 100) : 0
+    
+    if (selectedChartPeriod === 'week') {
+      // Calculate start of current week (Monday)
+      const startOfWeek = new Date(currentDate)
+      const dayOfWeek = startOfWeek.getDay() // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1 // Convert Sunday (0) to 6, others stay same
+      startOfWeek.setDate(startOfWeek.getDate() - daysFromMonday)
+      startOfWeek.setHours(0, 0, 0, 0)
+      
+      // Sum up words added from current week only
+      let thisWeekWordsAdded = 0
+      
+      weeklyData.forEach((dayData, index) => {
+        // Calculate the actual date for this day in weeklyData
+        const dayDate = new Date(currentDate)
+        dayDate.setDate(dayDate.getDate() - (6 - index)) // weeklyData goes from oldest to newest
+        dayDate.setHours(0, 0, 0, 0)
+        
+        // Only count if this day is in current week
+        if (dayDate >= startOfWeek && dayDate <= currentDate) {
+          thisWeekWordsAdded += dayData.wordsAdded
+        }
+      })
+      
+      const weeklyGoal = totalDailyGoal * 7
+      const addedProgress = weeklyGoal > 0 ? Math.min(100, Math.round((thisWeekWordsAdded / weeklyGoal) * 100)) : 0
+      
+      return {
+        wordsAdded: {
+          current: thisWeekWordsAdded,
+          goal: weeklyGoal,
+          percentage: addedProgress
+        },
+        masteryRate: {
+          mastered: totalWordsMastered,
+          total: totalWordsAdded,
+          percentage: masteryRate
+        }
+      }
+    } else {
+      // Calculate start of current month (1st day)
+      const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
+      startOfMonth.setHours(0, 0, 0, 0)
+      
+      // Calculate days in current month for accurate goal
+      const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate()
+      
+      // Sum up words added from current month only
+      let thisMonthWordsAdded = 0
+      
+      monthlyData.forEach((monthData) => {
+        // Check if this month entry corresponds to current month
+        // monthlyData uses month abbreviations like 'Jan', 'Feb', etc.
+        const currentMonthAbbr = currentDate.toLocaleDateString('en-US', { month: 'short' })
+        if (monthData.month === currentMonthAbbr) {
+          thisMonthWordsAdded = monthData.wordsAdded
+        }
+      })
+      
+      const monthlyGoal = totalDailyGoal * daysInMonth
+      const addedProgress = monthlyGoal > 0 ? Math.min(100, Math.round((thisMonthWordsAdded / monthlyGoal) * 100)) : 0
+      
+      return {
+        wordsAdded: {
+          current: thisMonthWordsAdded,
+          goal: monthlyGoal,
+          percentage: addedProgress
+        },
+        masteryRate: {
+          mastered: totalWordsMastered,
+          total: totalWordsAdded,
+          percentage: masteryRate
+        }
+      }
+    }
+  }, [selectedChartPeriod, weeklyData, monthlyData, appState.notebooks, getCurrentDate, profile, totalWordsStats])
+
+  // Circular chart data based on selected period
+  const getCircularData = () => {
+    const weeklyTotal = weeklyData.reduce((total, day) => total + day.wordsAdded, 0)
+    const monthlyTotal = weeklyTotal * 4 // Approximate monthly data
     
     switch (selectedPeriod) {
       case 'week':
         return {
-          current: weeklyTotal,
-          target: todayProgress.goal * 7, // Daily goal * 7 days
-          comparison: `${weeklyTotal} words this week`,
-          trend: weeklyTotal > 0 ? 'up' : 'neutral'
+          value: weeklyTotal,
+          label: 'words this week'
         }
       case 'month':
         return {
-          current: Math.min(totalWordsAdded, totalWordsAdded), // Approximate month total
-          target: todayProgress.goal * 30, // Daily goal * 30 days
-          comparison: `${totalWordsAdded} total words`,
-          trend: totalWordsAdded > 0 ? 'up' : 'neutral'
-        }
-      case 'year':
-        return {
-          current: totalWordsAdded,
-          target: todayProgress.goal * 365, // Daily goal * 365 days
-          comparison: `${totalWordsAdded} words overall`,
-          trend: totalWordsAdded > 0 ? 'up' : 'neutral'
+          value: monthlyTotal,
+          label: 'words this month'
         }
     }
   }
 
-  const performanceData = getPerformanceData()
-
-  const getActivityColor = (intensity: number) => {
-    // GitHub's authentic green color scale (light mode)
+  const getActivityColor = (isActive: number) => {
+    // Binary color system: gray (no activity) or green (active)
     const activityColors = [
-      '#ebedf0',   // 0 - no activity (GitHub's exact gray)
-      '#9be9a8',   // 1 - few contributions (GitHub's lightest green)
-      '#40c463',   // 2 - some contributions (GitHub's light green)
-      '#30a14e',   // 3 - many contributions (GitHub's medium green)
-      '#216e39',   // 4 - most contributions (GitHub's darkest green)
+      '#ebedf0',   // 0 - no activity (GitHub's gray)
+      '#40c463',   // 1 - active day (GitHub's green)
     ]
-    return activityColors[intensity] || activityColors[0]
+    return activityColors[isActive] || activityColors[0]
   }
 
-  // Use real activity data or fallback to empty
-  const habitHeatmapData = activityData.length > 0 ? activityData : [
-    Array(25).fill(0),
-    Array(25).fill(0),
-    Array(25).fill(0),
-    Array(25).fill(0),
-    Array(25).fill(0),
-    Array(25).fill(0),
-    Array(25).fill(0),
-  ]
+  // Use real activity data or fallback to empty (7 rows × 25 columns)
+  const habitHeatmapData = activityData.length > 0 ? activityData : 
+    Array.from({ length: 7 }, () => Array(25).fill(0))
 
 
   const styles = createStyles(colors)
@@ -213,208 +439,140 @@ export default function DashboardScreen() {
         {/* Header */}
         <SharedHeader title="Dashboard" />
 
-        {/* Performance Overview */}
-        <View style={styles.performanceCard}>
-          <View style={styles.performanceHeader}>
-            <Text style={styles.performanceTitle}>Your Progress</Text>
+        {/* Section 1: Progress Overview Card */}
+        <View style={styles.section1Card}>
+          <Text style={styles.sectionTitle}>Progress Overview</Text>
+          
+          {/* Toggle */}
+          <View style={styles.toggleContainer}>
             <View style={styles.periodTabs}>
-              {(['week', 'month', 'year'] as const).map((period) => (
+              {([
+                { key: 'week', label: 'Week' },
+                { key: 'month', label: 'Month' }
+              ] as const).map((period) => (
                 <TouchableOpacity
-                  key={period}
+                  key={period.key}
                   style={[
                     styles.periodTab,
-                    selectedPeriod === period && styles.periodTabActive
+                    selectedChartPeriod === period.key && styles.periodTabActive
                   ]}
-                  onPress={() => setSelectedPeriod(period)}
+                  onPress={() => setSelectedChartPeriod(period.key)}
                 >
                   <Text style={[
                     styles.periodTabText,
-                    selectedPeriod === period && styles.periodTabTextActive
+                    selectedChartPeriod === period.key && styles.periodTabTextActive
                   ]}>
-                    {period.charAt(0).toUpperCase() + period.slice(1)}
+                    {period.label}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
-          <View style={styles.progressContainer}>
-            <View style={styles.progressHeader}>
-              <Text style={styles.progressValue}>{performanceData.current}</Text>
-              <Text style={styles.progressTarget}>of {performanceData.target} words</Text>
-            </View>
+          {/* Circular Progress Charts */}
+          <View style={styles.circularChartsContainer}>
+            <CircularProgress
+              percentage={getCircularProgressData.wordsAdded.percentage}
+              color="#FFA400"
+              size={120}
+              strokeWidth={8}
+              title="Words Added"
+              subtitle={`${getCircularProgressData.wordsAdded.current}/${getCircularProgressData.wordsAdded.goal}`}
+            />
             
-            <View style={styles.progressBarContainer}>
-              <View style={styles.progressBarBg}>
-                <View 
-                  style={[
-                    styles.progressBarFill,
-                    { width: `${(performanceData.current / performanceData.target) * 100}%` }
-                  ]} 
-                />
-              </View>
-              <Text style={styles.progressPercentage}>
-                {Math.round((performanceData.current / performanceData.target) * 100)}%
-              </Text>
+            <CircularProgress
+              percentage={getCircularProgressData.masteryRate.percentage}
+              color="#EF4444"
+              size={120}
+              strokeWidth={8}
+              title="Mastery Rate"
+              subtitle={`${getCircularProgressData.masteryRate.mastered}/${getCircularProgressData.masteryRate.total} mastered`}
+            />
+          </View>
+
+          {/* Streak and Total Mastered Row */}
+          <View style={styles.streakMasteredRow}>
+            <View style={styles.streakMasteredItem}>
+              <Text style={styles.streakMasteredEmoji}>🔥</Text>
+              <Text style={styles.streakMasteredValue}>{profile?.streak_count || 0}</Text>
+              <Text style={styles.streakMasteredLabel}>Current Streak</Text>
             </View>
-            
-            <Text style={styles.progressComparison}>
-              📈 {performanceData.comparison}
-            </Text>
+            <View style={styles.streakMasteredItem}>
+              <Text style={styles.streakMasteredEmoji}>⭐</Text>
+              <Text style={styles.streakMasteredValue}>{totalWordsStats.totalMastered}</Text>
+              <Text style={styles.streakMasteredLabel}>Total Mastered</Text>
+            </View>
           </View>
         </View>
 
-        {/* Learning Streaks */}
-        <View style={styles.streakCard}>
-          <Text style={styles.streakTitle}>Learning Streak</Text>
+        {/* Section 2: Daily Activity Heatmap */}
+        <View style={styles.section2Card}>
+          <Text style={styles.sectionTitle}>Daily Activity</Text>
+          <Text style={styles.sectionSubtitle}>Your learning pattern over time</Text>
           
-          <View style={styles.streakContainer}>
-            <View style={styles.currentStreak}>
-              <Text style={styles.streakEmoji}>🔥</Text>
-              {__DEV__ && (
-                <TouchableOpacity
-                  style={styles.resetStreakButton}
-                  onPress={handleResetStreak}
-                >
-                  <Text style={styles.resetStreakIcon}>🔄</Text>
-                </TouchableOpacity>
-              )}
-              <View>
-                <Text style={styles.streakNumber}>{profile?.streak_count || 0}</Text>
-                <Text style={styles.streakLabel}>days</Text>
-              </View>
-            </View>
-            
-            <View style={styles.streakDivider} />
-            
-            <View style={styles.bestStreak}>
-              <Text style={styles.streakEmoji}>🏆</Text>
-              <View>
-                <Text style={styles.streakNumber}>{Math.max(profile?.streak_count || 0, 0)}</Text>
-                <Text style={styles.streakLabel}>best</Text>
-              </View>
-            </View>
-          </View>
-          
-          <Text style={styles.streakMotivation}>
-            Keep it up! You&apos;re doing great! 💪
-          </Text>
-        </View>
-
-        {/* Activity Heatmap */}
-        <View style={styles.activityCard}>
-          <Text style={styles.activityTitle}>Learning Activity</Text>
-          <Text style={styles.activitySubtitle}>Your daily learning pattern over time</Text>
-          
-          {/* Habit tracker heatmap */}
-          <View style={styles.habitHeatmapContainer}>
-            <View style={styles.habitGrid}>
-              {habitHeatmapData.map((row, rowIndex) => (
-                <View key={rowIndex} style={styles.habitRow}>
-                  {row.map((intensity, colIndex) => (
+          <View style={styles.heatmapContainer}>
+            <View style={styles.heatmapGrid}>
+              {[0, 1, 2, 3, 4, 5, 6].map((dayIndex) => (
+                <View key={dayIndex} style={styles.activityWeek}>
+                  {Array.from({ length: 25 }, (_, weekIndex) => (
                     <View
-                      key={colIndex}
+                      key={`${dayIndex}-${weekIndex}`}
                       style={[
-                        styles.habitSquare,
-                        { backgroundColor: getActivityColor(intensity) }
+                        styles.activityDay,
+                        { backgroundColor: getActivityColor(habitHeatmapData[dayIndex]?.[weekIndex] || 0) }
                       ]}
                     />
                   ))}
                 </View>
               ))}
             </View>
-          </View>
-          
-          <View style={styles.heatmapLegend}>
-            <Text style={styles.legendText}>Less</Text>
-            <View style={styles.legendSquares}>
-              {[0, 1, 2, 3, 4].map((intensity) => (
-                <View
-                  key={intensity}
-                  style={[
-                    styles.legendSquare,
-                    { backgroundColor: getActivityColor(intensity) }
-                  ]}
-                />
-              ))}
+            
+            <View style={styles.heatmapLegend}>
+              <Text style={styles.legendText}>No activity</Text>
+              <View style={styles.legendSquares}>
+                {[0, 1].map((isActive) => (
+                  <View
+                    key={isActive}
+                    style={[
+                      styles.legendSquare,
+                      { backgroundColor: getActivityColor(isActive) }
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text style={styles.legendText}>Active</Text>
             </View>
-            <Text style={styles.legendText}>More</Text>
           </View>
         </View>
 
-        {/* Weekly Activity */}
-        <View style={styles.weeklyCard}>
-          <Text style={styles.weeklyTitle}>This Week</Text>
-          
-          <View style={styles.weeklyGrid}>
-            {weeklyData.map((dayData, index) => {
-              const isActive = dayData.words > 0
-              const dayLetter = dayData.day.charAt(0)
-              return (
-                <View key={index} style={styles.dayContainer}>
-                  <View style={[
-                    styles.dayCircle,
-                    { backgroundColor: isActive ? colors.primary : colors.gray200 }
-                  ]}>
-                    <Text style={[
-                      styles.dayText,
-                      { color: isActive ? colors.cardBackground : colors.textSecondary }
-                    ]}>
-                      {dayLetter}
-                    </Text>
-                  </View>
-                </View>
-              )
-            })}
+        {/* Section 3: Key Statistics */}
+        <View style={styles.section3Card}>
+          <View style={styles.keyStatsGrid}>
+            <View style={styles.keyStatCard}>
+              <Text style={styles.keyStatValue}>{totalWordsStats.totalAdded}</Text>
+              <Text style={styles.keyStatLabel}>Total Vocabulary</Text>
+            </View>
+            <View style={styles.keyStatCard}>
+              <Text style={styles.keyStatValue}>{totalWordsStats.totalMastered}</Text>
+              <Text style={styles.keyStatLabel}>Words Mastered</Text>
+            </View>
+          </View>
+          <View style={styles.keyStatsGrid}>
+            <View style={styles.keyStatCard}>
+              <Text style={styles.keyStatValue}>
+                {totalWordsStats.totalAdded > 0 
+                  ? Math.round((totalWordsStats.totalMastered / totalWordsStats.totalAdded) * 100)
+                  : 0}%
+              </Text>
+              <Text style={styles.keyStatLabel}>Success Rate</Text>
+            </View>
+            <View style={styles.keyStatCard}>
+              <Text style={styles.keyStatValue}>{todayProgress.wordsAdded}</Text>
+              <Text style={styles.keyStatLabel}>Words Today</Text>
+            </View>
           </View>
         </View>
 
-        {/* Key Metrics */}
-        <View style={styles.metricsContainer}>
-          <View style={styles.metricRow}>
-            <View style={styles.metricCard}>
-              <View style={styles.metricHeader}>
-                <Text style={styles.metricIcon}>📚</Text>
-                <Text style={styles.metricValue}>{profile?.total_words_added || 0}</Text>
-              </View>
-              <Text style={styles.metricLabel}>Total Vocabulary</Text>
-              <Text style={styles.metricChange}>+{weeklyData.reduce((total, day) => total + day.words, 0)} this week</Text>
-            </View>
-            
-            <View style={styles.metricCard}>
-              <View style={styles.metricHeader}>
-                <Text style={styles.metricIcon}>⭐</Text>
-                <Text style={styles.metricValue}>{profile?.total_words_mastered || 0}</Text>
-              </View>
-              <Text style={styles.metricLabel}>Words Mastered</Text>
-              <Text style={styles.metricChange}>learning in progress</Text>
-            </View>
-          </View>
-          
-          <View style={styles.metricRow}>
-            <View style={styles.metricCard}>
-              <View style={styles.metricHeader}>
-                <Text style={styles.metricIcon}>🎯</Text>
-                <Text style={styles.metricValue}>
-                  {profile?.total_words_added && profile?.total_words_added > 0 
-                    ? Math.round((profile.total_words_mastered / profile.total_words_added) * 100)
-                    : 0}%
-                </Text>
-              </View>
-              <Text style={styles.metricLabel}>Success Rate</Text>
-              <Text style={styles.metricChangeGreen}>keep learning!</Text>
-            </View>
-            
-            <View style={styles.metricCard}>
-              <View style={styles.metricHeader}>
-                <Text style={styles.metricIcon}>⚡</Text>
-                <Text style={styles.metricValue}>{todayProgress.wordsAdded}</Text>
-              </View>
-              <Text style={styles.metricLabel}>Words Today</Text>
-              <Text style={styles.metricChange}>of {todayProgress.goal} goal</Text>
-            </View>
-          </View>
-        </View>
 
       </ScrollView>
     </View>
@@ -476,44 +634,102 @@ const createStyles = (colors: any) => StyleSheet.create({
   periodTabTextActive: {
     color: colors.textPrimary,
   },
-  progressContainer: {
-    alignItems: 'center',
-  },
-  progressHeader: {
-    alignItems: 'center',
+  // Section 1: Circular Statistics
+  circularSection: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginHorizontal: SPACING.lg,
     marginBottom: SPACING.lg,
+    ...SHADOWS.sm,
   },
-  progressValue: {
-    fontSize: TYPOGRAPHY['4xl'],
+  circularContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  circularProgressContainer: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  circularProgress: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: colors.primaryLight || colors.gray100,
+    borderWidth: 8,
+    borderColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  circularValue: {
+    fontSize: TYPOGRAPHY['2xl'],
     fontWeight: TYPOGRAPHY.bold,
     color: colors.primary,
   },
-  progressTarget: {
-    fontSize: TYPOGRAPHY.base,
+  circularLabel: {
+    fontSize: TYPOGRAPHY.xs,
     color: colors.textSecondary,
+    textAlign: 'center',
+    marginTop: SPACING.xs,
   },
-  progressBarContainer: {
-    width: '100%',
+  sideMetrics: {
+    flex: 1,
+    gap: SPACING.lg,
+    paddingLeft: SPACING.lg,
+  },
+  sideMetricItem: {
     alignItems: 'center',
-    marginBottom: SPACING.lg,
   },
-  progressBarBg: {
-    width: '100%',
-    height: 12,
-    backgroundColor: colors.gray200,
-    borderRadius: RADIUS.sm,
-    overflow: 'hidden',
-    marginBottom: SPACING.sm,
+  sideMetricEmoji: {
+    fontSize: 20,
+    marginBottom: SPACING.xs,
   },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: colors.primary,
-    borderRadius: RADIUS.sm,
-  },
-  progressPercentage: {
+  sideMetricValue: {
     fontSize: TYPOGRAPHY.lg,
     fontWeight: TYPOGRAPHY.bold,
     color: colors.textPrimary,
+  },
+  sideMetricLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    color: colors.textSecondary,
+  },
+  
+  // Section 2: Heatmap (existing styles work)
+  heatmapGrid: {
+    flexDirection: 'column',
+    gap: 2,
+    justifyContent: 'center',
+  },
+  
+  // Section 3: Key Metrics
+  keyMetricsSection: {
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.lg,
+    gap: SPACING.md,
+  },
+  keyMetricsGrid: {
+    flexDirection: 'row',
+    gap: SPACING.md,
+  },
+  keyMetricCard: {
+    flex: 1,
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    alignItems: 'center',
+    ...SHADOWS.sm,
+  },
+  keyMetricValue: {
+    fontSize: TYPOGRAPHY['2xl'],
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.primary,
+    marginBottom: SPACING.xs,
+  },
+  keyMetricLabel: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
   },
   progressComparison: {
     fontSize: TYPOGRAPHY.base,
@@ -558,17 +774,6 @@ const createStyles = (colors: any) => StyleSheet.create({
   streakEmoji: {
     fontSize: TYPOGRAPHY['2xl'],
     marginRight: SPACING.md,
-  },
-  resetStreakButton: {
-    marginLeft: -4,
-    marginRight: SPACING.xs,
-    padding: 4,
-    borderRadius: 12,
-    backgroundColor: colors.gray100,
-    opacity: 0.7,
-  },
-  resetStreakIcon: {
-    fontSize: 16,
   },
   streakNumber: {
     fontSize: TYPOGRAPHY['2xl'],
@@ -624,6 +829,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: SPACING.sm,
+    marginTop: SPACING.lg,
   },
   legendText: {
     fontSize: TYPOGRAPHY.xs,
@@ -638,7 +844,8 @@ const createStyles = (colors: any) => StyleSheet.create({
     height: 11.6,
     borderRadius: 2,
   },
-  weeklyCard: {
+  // Section 2 & 3 Styles
+  section2Card: {
     backgroundColor: colors.cardBackground,
     borderRadius: RADIUS.xl,
     padding: SPACING.xl,
@@ -646,72 +853,165 @@ const createStyles = (colors: any) => StyleSheet.create({
     marginBottom: SPACING.xl,
     ...SHADOWS.md,
   },
-  weeklyTitle: {
-    fontSize: TYPOGRAPHY.xl,
-    fontWeight: TYPOGRAPHY.bold,
-    color: colors.textPrimary,
-    marginBottom: SPACING.lg,
-    textAlign: 'center',
+  section3Card: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.xl,
+    padding: SPACING.xl,
+    marginHorizontal: SPACING.xl,
+    marginBottom: SPACING.xl,
+    ...SHADOWS.md,
   },
-  weeklyGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  dayContainer: {
-    alignItems: 'center',
-  },
-  dayCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  dayText: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-  },
-  metricsContainer: {
-    paddingHorizontal: SPACING.xl,
-  },
-  metricRow: {
+  keyStatsGrid: {
     flexDirection: 'row',
     gap: SPACING.md,
     marginBottom: SPACING.md,
   },
-  metricCard: {
+  keyStatCard: {
     flex: 1,
-    backgroundColor: colors.cardBackground,
+    backgroundColor: colors.gray50 || colors.gray100,
     borderRadius: RADIUS.lg,
     padding: SPACING.lg,
-    ...SHADOWS.sm,
-  },
-  metricHeader: {
-    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: SPACING.sm,
   },
-  metricIcon: {
-    fontSize: TYPOGRAPHY.xl,
-    marginRight: SPACING.sm,
-  },
-  metricValue: {
-    fontSize: TYPOGRAPHY.xl,
+  keyStatValue: {
+    fontSize: TYPOGRAPHY['2xl'],
     fontWeight: TYPOGRAPHY.bold,
-    color: colors.textPrimary,
+    color: colors.primary,
+    marginBottom: SPACING.xs,
   },
-  metricLabel: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.medium,
+  keyStatLabel: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  sectionTitle: {
+    fontSize: TYPOGRAPHY.xl,
+    fontWeight: TYPOGRAPHY.semibold,
     color: colors.textPrimary,
     marginBottom: SPACING.xs,
   },
-  metricChange: {
+  sectionSubtitle: {
     fontSize: TYPOGRAPHY.sm,
     color: colors.textSecondary,
+    marginBottom: SPACING.xl,
   },
-  metricChangeGreen: {
+  heatmapContainer: {
+    alignItems: 'center',
+  },
+  toggleContainer: {
+    alignItems: 'center',
+    marginBottom: SPACING.lg,
+  },
+  // Missing heatmap styles
+  activityWeek: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  activityDay: {
+    width: 11.6,
+    height: 11.6,
+    borderRadius: 2,
+  },
+  // Chart Header Styles
+  chartHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.lg,
+  },
+  chartTitle: {
+    fontSize: TYPOGRAPHY.xl,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.textPrimary,
+  },
+  // Streak and Mastered Section Styles
+  streakMasteredRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingTop: SPACING.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.gray200,
+  },
+  streakMasteredItem: {
+    alignItems: 'center',
+  },
+  streakMasteredEmoji: {
+    fontSize: 24,
+    marginBottom: SPACING.xs,
+  },
+  streakMasteredValue: {
+    fontSize: TYPOGRAPHY['2xl'],
+    fontWeight: TYPOGRAPHY.bold,
+    color: colors.primary,
+    marginBottom: SPACING.xs,
+  },
+  streakMasteredLabel: {
     fontSize: TYPOGRAPHY.sm,
-    color: colors.success,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  // Section 1 Card Style
+  section1Card: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.xl,
+    padding: SPACING.lg,
+    marginHorizontal: SPACING.xl,
+    marginBottom: SPACING.lg,
+    ...SHADOWS.md,
+  },
+  // Scaled & Centered Chart Styles
+  chartContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: SPACING.xs,
+    paddingHorizontal: SPACING.xs,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.xs,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  circularChartsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: SPACING.lg,
+    paddingHorizontal: SPACING.md,
+  },
+  chartLegend: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: SPACING.md,
+    gap: SPACING.md,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  legendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  // Area Chart Styles
+  areaChartWrapper: {
+    width: '100%',
+    alignItems: 'center',
+    paddingVertical: SPACING.md,
+  },
+  svgChart: {
+    marginBottom: SPACING.sm,
+  },
+  xAxisLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '90%',
+    paddingHorizontal: SPACING.xs,
+  },
+  xAxisLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    flex: 1,
   },
 })

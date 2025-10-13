@@ -35,6 +35,7 @@ const renderBoldText = (text: string, baseStyle: any) => {
 import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { StreakProgressDisplay } from '@/components/StreakProgressDisplay'
 import {
   Alert,
   Animated,
@@ -1034,6 +1035,7 @@ export default function ReviewScreen() {
     console.log(`🎯 Sample word object:`, reviewResults.remembered[0] || reviewResults.forgotten[0])
     
     // Group by database round ranges and organize by level (Bronze: 1-4, Silver: 5-8, Gold: 9-12)
+    // Display rounds in ascending order - smallest rounds first
     const roundRanges = [
       { level: 'bronze', dbRounds: [1, 2, 3, 4] },
       { level: 'silver', dbRounds: [5, 6, 7, 8] },
@@ -1110,6 +1112,16 @@ export default function ReviewScreen() {
           {/* Header */}
           <Animated.View style={styles.dashboardHeaderCompact}>
             <Text style={styles.dashboardTitleCompact}>🎉 Review Complete!</Text>
+            
+            {/* Streak Progress Display */}
+            {profile?.streak_count !== undefined && (
+              <StreakProgressDisplay
+                currentStreak={profile.streak_count}
+                previousStreak={previousStreakCount}
+                showAnimation={showStreakAnimation}
+                compact={false}
+              />
+            )}
           </Animated.View>
 
           {/* Circular Progress Dashboard */}

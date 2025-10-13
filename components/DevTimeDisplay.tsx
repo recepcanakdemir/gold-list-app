@@ -61,27 +61,6 @@ export function DevTimeDisplay() {
     }
   }
 
-  const handleBulkAdvance = async (days: number) => {
-    if (isAdvancing) return
-    
-    setIsAdvancing(true)
-    console.log(`⏳ Advancing ${days} days... Please wait`)
-    
-    try {
-      for (let i = 0; i < days; i++) {
-        await nextDay()
-        // Small delay between each day to prevent overwhelming the system
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
-      // Final delay to let React process all updates
-      await new Promise(resolve => setTimeout(resolve, 500))
-    } catch (error) {
-      console.error(`Error advancing ${days} days:`, error)
-    } finally {
-      setIsAdvancing(false)
-      console.log(`✅ Successfully advanced ${days} days`)
-    }
-  }
 
   const handlePreviousDay = async () => {
     if (isAdvancing) return
@@ -137,27 +116,6 @@ export function DevTimeDisplay() {
             </TouchableOpacity>
           </View>
 
-          {/* Bulk Day Controls */}
-          <View style={styles.bulkControls}>
-            <Text style={styles.bulkLabel}>Quick Jump:</Text>
-            <View style={styles.bulkButtons}>
-              <TouchableOpacity 
-                style={[styles.bulkButton, { opacity: isAdvancing ? 0.3 : 1 }]}
-                onPress={() => handleBulkAdvance(7)}
-                disabled={isAdvancing}
-              >
-                <Text style={styles.bulkButtonText}>{isAdvancing ? '⏳' : '+7 days'}</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.bulkButton, { opacity: isAdvancing ? 0.3 : 1 }]}
-                onPress={() => handleBulkAdvance(14)}
-                disabled={isAdvancing}
-              >
-                <Text style={styles.bulkButtonText}>{isAdvancing ? '⏳' : '+14 days'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
 
           {/* Control Buttons */}
           <View style={styles.controlButtons}>
@@ -275,35 +233,6 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.sm,
     fontWeight: TYPOGRAPHY.medium,
     color: colors.primary,
-  },
-  bulkControls: {
-    marginBottom: SPACING.md,
-    alignItems: 'center',
-  },
-  bulkLabel: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-    marginBottom: SPACING.xs,
-    fontWeight: TYPOGRAPHY.medium,
-  },
-  bulkButtons: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-  },
-  bulkButton: {
-    backgroundColor: colors.secondary + '20',
-    borderRadius: RADIUS.md,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.secondary,
-    minWidth: 80,
-  },
-  bulkButtonText: {
-    fontSize: TYPOGRAPHY.xs,
-    fontWeight: TYPOGRAPHY.medium,
-    color: colors.secondary,
   },
   controlButtons: {
     flexDirection: 'row',

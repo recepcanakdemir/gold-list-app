@@ -27,10 +27,11 @@ export default function WordSavePage() {
     notebookId: string
   }>()
   
-  const { recordUserActivity } = useAuth()
+  const { recordUserActivity, profile } = useAuth()
   const { refreshNotebooks, updateNotebookLastUsed } = useApp()
   const [isLoading, setIsLoading] = useState(true)
   const [hasStartedSave, setHasStartedSave] = useState(false)
+  const [previousStreak, setPreviousStreak] = useState<number | undefined>()
 
   const parsedWords: WordToSave[] = React.useMemo(() => {
     try {
@@ -39,6 +40,13 @@ export default function WordSavePage() {
       return []
     }
   }, [wordsToSave])
+
+  useEffect(() => {
+    // Capture current streak before saving words
+    if (profile?.streak_count !== undefined) {
+      setPreviousStreak(profile.streak_count)
+    }
+  }, [profile?.streak_count])
 
   useEffect(() => {
     // Only start save process once
@@ -116,6 +124,8 @@ export default function WordSavePage() {
       isLoading={isLoading}
       wordCount={parsedWords.length}
       notebookTitle={notebookTitle || 'Unknown Notebook'}
+      currentStreak={profile?.streak_count}
+      previousStreak={previousStreak}
       savedWords={parsedWords.map(word => ({
         word: word.word,
         translation: word.translation || word.meaning,
