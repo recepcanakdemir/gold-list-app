@@ -1444,6 +1444,11 @@ export default function ReviewScreen() {
                   text: 'Exit',
                   style: 'destructive',
                   onPress: () => {
+                    // Set flag that reviews were exited for home screen to detect changes
+                    if (typeof window !== 'undefined') {
+                      (window as any).reviewsJustCompleted = true
+                    }
+                    
                     if (router.canGoBack()) {
                       router.back()
                     } else {

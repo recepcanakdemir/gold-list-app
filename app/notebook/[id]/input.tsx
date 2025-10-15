@@ -37,6 +37,11 @@ interface WordEntry {
   sentence_meaning?: string
   meaning_bold?: string
   ai_generated?: boolean
+  // New fields for tracking state
+  id?: string          // Database ID for existing words
+  isExisting?: boolean // True if word was loaded from database
+  isDirty?: boolean    // True if existing word has been modified
+  position_in_page?: number // Original position for existing words
 }
 
 interface SavedWord {
@@ -50,6 +55,9 @@ interface SavedWord {
   sentence_meaning?: string
   meaning_bold?: string
   ai_generated?: boolean
+  // State tracking fields (same as WordEntry)
+  isExisting?: boolean 
+  isDirty?: boolean
 }
 
 export default function WordInputScreen() {
@@ -64,6 +72,8 @@ export default function WordInputScreen() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [words, setWords] = useState<WordEntry[]>([])
   const [loading, setLoading] = useState(false)
+  const [existingWordCount, setExistingWordCount] = useState(0)
+  const [existingWords, setExistingWords] = useState<any[]>([])
   
   // New state for List Mode redesign
   const [currentWordForm, setCurrentWordForm] = useState<WordEntry>({ 
@@ -358,12 +368,21 @@ export default function WordInputScreen() {
   const syncFocusToListMode = () => {
     const filledFocusWords = words.filter(w => w.word?.trim() && w.meaning?.trim())
     
-    // Convert focus words to saved words format
+    // Convert all filled words (existing + new) to saved words format
     const focusWordsAsSaved = filledFocusWords.map((word, index) => ({
-      id: `focus-${index}-${word.word}-${word.meaning}`,
+      id: word.id || `focus-${index}-${word.word}-${word.meaning}`, // Use real ID for existing words
       word: word.word?.trim() || '',
       meaning: word.meaning?.trim() || '',
-      notes: word.notes?.trim() || ''
+      notes: word.notes?.trim() || '',
+      word_type: word.word_type || 'unknown',
+      example_sentence: word.example_sentence || '',
+      sentence_bold: word.sentence_bold || '',
+      sentence_meaning: word.sentence_meaning || '',
+      meaning_bold: word.meaning_bold || '',
+      ai_generated: word.ai_generated || false,
+      // Add state tracking for List mode
+      isExisting: word.isExisting,
+      isDirty: word.isDirty
     }))
 
     // Only update if there's a meaningful difference
@@ -380,22 +399,59 @@ export default function WordInputScreen() {
 
     const maxWords = notebook?.words_per_day || 20
     
-    // Create new words array with saved words + empty slots
+    // Create new words array with saved words + empty slots, preserving full state
     const syncedWords = Array.from({ length: maxWords }, (_, index) => {
       if (index < savedWords.length) {
         const savedWord = savedWords[index]
         return {
-          word: savedWord.word,
-          meaning: savedWord.meaning,
-          notes: savedWord.notes
+          word: savedWord.word || '',
+          meaning: savedWord.meaning || '',
+          notes: savedWord.notes || '',
+          word_type: savedWord.word_type || 'unknown',
+          example_sentence: savedWord.example_sentence || '',
+          sentence_bold: savedWord.sentence_bold || '',
+          sentence_meaning: savedWord.sentence_meaning || '',
+          meaning_bold: savedWord.meaning_bold || '',
+          ai_generated: savedWord.ai_generated || false,
+          // Preserve state tracking fields
+          id: savedWord.id,
+          isExisting: savedWord.isExisting || false,
+          isDirty: savedWord.isDirty || false,
+          position_in_page: index + 1
         }
       }
-      return { word: '', meaning: '', notes: '' }
+      // Empty slot for new words
+      return { 
+        word: '', 
+        meaning: '', 
+        notes: '', 
+        word_type: 'unknown',
+        example_sentence: '',
+        sentence_meaning: '',
+        ai_generated: false,
+        isExisting: false,
+        isDirty: false,
+        position_in_page: index + 1
+      }
     })
 
-    // Only update if there's a meaningful difference
-    const currentWordsString = JSON.stringify(words.map(w => ({word: w.word, meaning: w.meaning, notes: w.notes})))
-    const syncedWordsString = JSON.stringify(syncedWords.map(w => ({word: w.word, meaning: w.meaning, notes: w.notes})))
+    // Only update if there's a meaningful difference (check all relevant fields)
+    const currentWordsString = JSON.stringify(words.map(w => ({
+      word: w.word, 
+      meaning: w.meaning, 
+      notes: w.notes,
+      id: w.id,
+      isExisting: w.isExisting,
+      isDirty: w.isDirty
+    })))
+    const syncedWordsString = JSON.stringify(syncedWords.map(w => ({
+      word: w.word, 
+      meaning: w.meaning, 
+      notes: w.notes,
+      id: w.id,
+      isExisting: w.isExisting,
+      isDirty: w.isDirty
+    })))
     
     if (currentWordsString !== syncedWordsString) {
       setWords(syncedWords)
@@ -426,18 +482,20 @@ export default function WordInputScreen() {
       const pages = await supabaseService.getPages(id!)
       const currentPage = pages.find(p => p.page_number === pageNumber)
       
-      if (currentPage && currentPage.words && currentPage.words.length > 0) {
-        // Page already has words - redirect to review or show locked message
+      // Check if page is actually completed (at word limit) before blocking
+      const dailyWordLimit = notebook?.words_per_day || 20
+      const currentWordCount = currentPage?.words?.length || 0
+      
+      // Store existing word count and words for position calculation and display
+      setExistingWordCount(currentWordCount)
+      setExistingWords(currentPage?.words || [])
+      
+      if (currentWordCount >= dailyWordLimit) {
+        // Page has reached word limit - show proper completion message
         Alert.alert(
-          'Page Already Has Words',
-          'This page already contains words and cannot accept new word additions. Pages can only have words added once, then they move through review rounds.',
+          'Page Complete!',
+          `This page has reached its daily word limit (${currentWordCount}/${dailyWordLimit} words). Come back in 14 days for your first review!`,
           [
-            {
-              text: 'Go to Reviews',
-              onPress: () => {
-                router.replace(`/notebook/${id}/review?page=${pageNumber}`)
-              }
-            },
             {
               text: 'Back to Notebook',
               onPress: () => {
@@ -449,41 +507,100 @@ export default function WordInputScreen() {
         return
       }
       
-      // Page is available for word input
-      initializeWords()
+      // Page is available for word input - initialize with existing words if any
+      initializeWords(currentPage)
     } catch (error) {
       console.error('Error checking page status:', error)
+      setExistingWordCount(0) // Reset to 0 for new pages
+      setExistingWords([]) // Reset existing words
       initializeWords() // Fallback to normal initialization
     }
   }
 
-  const initializeWords = () => {
+  const initializeWords = (existingPage?: any) => {
     const maxWords = notebook?.words_per_day || 20
-    const initialWords: WordEntry[] = Array.from({ length: maxWords }, () => ({
-      word: '',
-      meaning: '',
-      notes: '',
-      word_type: 'unknown',
-      example_sentence: '',
-      sentence_meaning: '',
-      ai_generated: false,
-    }))
+    const existingWordsFromDB = existingPage?.words || []
+    
+    // Create unified array: existing words first, then empty slots
+    const initialWords: WordEntry[] = []
+    
+    // Add existing words as editable entries
+    existingWordsFromDB.forEach((dbWord: any, index: number) => {
+      initialWords.push({
+        word: dbWord.word || '',
+        meaning: dbWord.meaning || dbWord.translation || '',
+        notes: dbWord.notes || '',
+        word_type: dbWord.word_type || 'unknown',
+        example_sentence: dbWord.example_sentence || '',
+        sentence_bold: dbWord.sentence_bold || '',
+        sentence_meaning: dbWord.sentence_meaning || '',
+        meaning_bold: dbWord.meaning_bold || '',
+        ai_generated: dbWord.ai_generated || false,
+        // State tracking fields
+        id: dbWord.id,
+        isExisting: true,
+        isDirty: false,
+        position_in_page: dbWord.position_in_page || (index + 1)
+      })
+    })
+    
+    // Add empty slots for new words
+    const remainingSlots = maxWords - existingWordsFromDB.length
+    for (let i = 0; i < remainingSlots; i++) {
+      initialWords.push({
+        word: '',
+        meaning: '',
+        notes: '',
+        word_type: 'unknown',
+        example_sentence: '',
+        sentence_meaning: '',
+        ai_generated: false,
+        // State tracking fields
+        isExisting: false,
+        isDirty: false,
+        position_in_page: existingWordsFromDB.length + i + 1
+      })
+    }
+    
     setWords(initialWords)
+    
+    // Start from the first empty slot, or first word if none are filled
+    if (mode === 'focus') {
+      const firstEmptyIndex = initialWords.findIndex(w => !w.word.trim())
+      setCurrentIndex(firstEmptyIndex >= 0 ? firstEmptyIndex : 0)
+    }
   }
 
   const updateWord = (index: number, field: keyof WordEntry, value: string) => {
     const newWords = [...words]
-    newWords[index] = { ...newWords[index], [field]: value }
+    const currentWord = newWords[index]
+    
+    // Update the field
+    newWords[index] = { ...currentWord, [field]: value }
+    
+    // Mark existing words as dirty when modified
+    if (currentWord.isExisting) {
+      newWords[index].isDirty = true
+    }
+    
     setWords(newWords)
   }
 
   const updateWordWithAISentence = (index: number, sentence: string) => {
     const newWords = [...words]
+    const currentWord = newWords[index]
+    
     newWords[index] = { 
-      ...newWords[index], 
+      ...currentWord, 
       example_sentence: sentence,
       ai_generated: true
     }
+    
+    // Mark existing words as dirty when AI sentence is added
+    if (currentWord.isExisting) {
+      newWords[index].isDirty = true
+    }
+    
     setWords(newWords)
   }
 
@@ -536,85 +653,126 @@ export default function WordInputScreen() {
 
   const handleSave = async () => {
     let wordsToSave: any[] = []
+    let wordsToUpdate: any[] = []
     
     if (mode === 'focus') {
-      // Enhanced validation with null safety
-      const filledWords = words.filter(w => 
+      // Process words from unified array
+      const validWords = words.filter(w => 
         (w.word || '').trim() && (w.meaning || '').trim()
       )
-      wordsToSave = filledWords.map((word, index) => ({
-        word: (word.word || '').trim(),
-        translation: (word.meaning || '').trim(),
-        meaning: (word.meaning || '').trim(),
-        example_sentence: (word.example_sentence || '').trim() || undefined,
-        sentence_bold: (word.sentence_bold || '').trim() || undefined,
-        sentence_meaning: (word.sentence_meaning || '').trim() || undefined,
-        meaning_bold: (word.meaning_bold || '').trim() || undefined,
-        notes: (word.notes || '').trim() || undefined,
-        word_type: word.word_type || 'unknown',
-        position_in_page: index + 1,
-      }))
+      
+      validWords.forEach((word) => {
+        const wordData = {
+          word: (word.word || '').trim(),
+          translation: (word.meaning || '').trim(),
+          meaning: (word.meaning || '').trim(),
+          example_sentence: (word.example_sentence || '').trim() || undefined,
+          sentence_bold: (word.sentence_bold || '').trim() || undefined,
+          sentence_meaning: (word.sentence_meaning || '').trim() || undefined,
+          meaning_bold: (word.meaning_bold || '').trim() || undefined,
+          notes: (word.notes || '').trim() || undefined,
+          word_type: word.word_type || 'unknown',
+          position_in_page: word.position_in_page || 1,
+        }
+        
+        if (word.isExisting && word.isDirty) {
+          // Existing word that has been modified
+          wordsToUpdate.push({
+            ...wordData,
+            id: word.id
+          })
+        } else if (!word.isExisting) {
+          // New word to insert
+          wordsToSave.push(wordData)
+        }
+        // Skip existing words that haven't been modified (no need to save)
+      })
     } else {
-      // List mode - use savedWords with validation
+      // List mode - process savedWords
       const validWords = savedWords.filter(w => 
         (w.word || '').trim() && (w.meaning || '').trim()
       )
-      wordsToSave = validWords.map((word, index) => ({
-        word: (word.word || '').trim(),
-        translation: (word.meaning || '').trim(),
-        meaning: (word.meaning || '').trim(),
-        example_sentence: (word.example_sentence || '').trim() || undefined,
-        sentence_bold: (word.sentence_bold || '').trim() || undefined,
-        sentence_meaning: (word.sentence_meaning || '').trim() || undefined,
-        meaning_bold: (word.meaning_bold || '').trim() || undefined,
-        notes: (word.notes || '').trim() || undefined,
-        word_type: word.word_type || 'unknown',
-        position_in_page: index + 1,
-      }))
+      
+      validWords.forEach((word, index) => {
+        const wordData = {
+          word: (word.word || '').trim(),
+          translation: (word.meaning || '').trim(),
+          meaning: (word.meaning || '').trim(),
+          example_sentence: (word.example_sentence || '').trim() || undefined,
+          sentence_bold: (word.sentence_bold || '').trim() || undefined,
+          sentence_meaning: (word.sentence_meaning || '').trim() || undefined,
+          meaning_bold: (word.meaning_bold || '').trim() || undefined,
+          notes: (word.notes || '').trim() || undefined,
+          word_type: word.word_type || 'unknown',
+          position_in_page: index + 1, // List mode uses sequential positioning
+        }
+        
+        if (word.isExisting && word.isDirty) {
+          // Existing word that has been modified
+          wordsToUpdate.push({
+            ...wordData,
+            id: word.id
+          })
+        } else if (!word.isExisting) {
+          // New word to insert
+          wordsToSave.push(wordData)
+        }
+      })
     }
     
-    if (wordsToSave.length === 0) {
-      Alert.alert('No Complete Words', 'Please add at least one word with both word and meaning filled before saving.')
+    // Check if there's anything to save
+    if (wordsToSave.length === 0 && wordsToUpdate.length === 0) {
+      Alert.alert('No Changes to Save', 'No new words added or existing words modified.')
       return
     }
 
-    // Immediately navigate to save page with words data
+    // Prepare data for save page - combine new and updated words
+    const allWordsForSave = [
+      ...wordsToSave,
+      ...wordsToUpdate.map(w => ({ ...w, isUpdate: true })) // Flag updates for the save page
+    ]
+
+    // Navigate to save page with smart save data
     router.push({
       pathname: '/word-save',
       params: {
-        wordsToSave: JSON.stringify(wordsToSave),
+        wordsToSave: JSON.stringify(allWordsForSave),
         notebookTitle: notebook?.title || 'Unknown Notebook',
         notebookId: id!
       }
     })
   }
 
-  // Enhanced progress calculation with real-time updates
+  // Enhanced progress calculation with unified word state
   const progress = useMemo(() => {
+    const target = notebook?.words_per_day || 20
+    
     if (mode === 'focus') {
-      // In focus mode, progress based on current position + filled words
+      // In focus mode, count all filled words in unified array
       const filledWords = words.filter(w => 
         (w.word || '').trim() && (w.meaning || '').trim()
       ).length
-      const target = notebook?.words_per_day || 20
-      // Use the higher of filled words or current position for visual progress
-      const progressValue = Math.min(Math.max(filledWords, currentIndex + 1) / target, 1)
-      return progressValue
+      return Math.min(filledWords / target, 1)
     } else {
-      const target = notebook?.words_per_day || 20
+      // In list mode, count saved words (which includes existing + new)
       return Math.min(savedWords.length / target, 1)
     }
-  }, [mode, words, savedWords, notebook?.words_per_day, currentIndex])
+  }, [mode, words, savedWords, notebook?.words_per_day])
 
   const filledWordsCount = useMemo(() => {
     const maxWords = notebook?.words_per_day || 20
+    
     if (mode === 'focus') {
-      // In focus mode, show current position (where user is working)
-      return Math.min(currentIndex + 1, maxWords)
+      // In focus mode, show filled words from unified array
+      const filledWords = words.filter(w => 
+        (w.word || '').trim() && (w.meaning || '').trim()
+      ).length
+      return Math.min(filledWords, maxWords)
     } else {
+      // In list mode, show saved words count
       return Math.min(savedWords.length, maxWords)
     }
-  }, [mode, currentIndex, savedWords, notebook?.words_per_day])
+  }, [mode, words, savedWords, notebook?.words_per_day])
 
   // New functions for List Mode form-based approach
   const handleSaveCurrentWord = () => {
@@ -627,6 +785,17 @@ export default function WordInputScreen() {
     const maxWords = notebook?.words_per_day || 20
     if (savedWords.length >= maxWords && !editingWordId) {
       Alert.alert('Word Limit Reached', `You can only add ${maxWords} words per day according to your notebook settings.`)
+      return
+    }
+
+    // Check for duplicates in saved words (case-insensitive)
+    const currentWordText = (currentWordForm.word || '').trim().toLowerCase()
+    const savedWordTexts = savedWords
+      .filter(w => !editingWordId || w.id !== editingWordId) // Exclude current editing word
+      .map(w => (w.word || '').trim().toLowerCase())
+    
+    if (savedWordTexts.includes(currentWordText)) {
+      Alert.alert('Duplicate Word', `"${currentWordForm.word}" is already in your list. Please enter a different word.`)
       return
     }
 
@@ -1039,6 +1208,21 @@ function FocusMode({
 
   return (
     <View style={styles.focusContainer}>
+      {/* Word Status Indicator */}
+      {currentWord && (
+        <View style={styles.wordStatusContainer}>
+          <Text style={styles.wordStatusText}>
+            Word {currentIndex + 1} of {words.length}
+            {currentWord.isExisting && (
+              <Text style={styles.existingIndicator}> • Previously Saved</Text>
+            )}
+            {currentWord.isExisting && currentWord.isDirty && (
+              <Text style={styles.modifiedIndicator}> • Modified</Text>
+            )}
+          </Text>
+        </View>
+      )}
+      
       <ScrollView style={styles.focusContent} showsVerticalScrollIndicator={false}>
         <View style={styles.inputGroup}>
           <Text style={styles.inputLabel}>Word Type</Text>
@@ -1153,7 +1337,15 @@ function NewListMode({
           {savedWords.map((word, index) => (
             <View key={word.id} style={styles.savedWordItem}>
               <View style={styles.savedWordItemHeader}>
-                <Text style={styles.savedWordNumber}>{index + 1}</Text>
+                <View style={styles.wordNumberContainer}>
+                  <Text style={styles.savedWordNumber}>{index + 1}</Text>
+                  {word.isExisting && (
+                    <Text style={styles.existingBadge}>Saved</Text>
+                  )}
+                  {word.isExisting && word.isDirty && (
+                    <Text style={styles.modifiedBadge}>Modified</Text>
+                  )}
+                </View>
                 <View style={styles.savedWordActions}>
                   <TouchableOpacity
                     style={styles.editWordButton}
@@ -2332,5 +2524,52 @@ const createStyles = (colors: any) => StyleSheet.create({
   requiredAsterisk: {
     color: colors.error || '#EF4444',
     fontWeight: 'bold',
+  },
+
+  // Word Status Indicator Styles
+  wordStatusContainer: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    backgroundColor: colors.surfaceVariant || colors.gray100,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  wordStatusText: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  existingIndicator: {
+    color: colors.primary,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  modifiedIndicator: {
+    color: colors.secondary || colors.warning || '#F59E0B',
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+
+  // List Mode Badge Styles
+  wordNumberContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  existingBadge: {
+    fontSize: TYPOGRAPHY.xs,
+    color: colors.primary,
+    backgroundColor: colors.primaryLight || colors.primary + '20',
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+    borderRadius: RADIUS.sm,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  modifiedBadge: {
+    fontSize: TYPOGRAPHY.xs,
+    color: colors.secondary || colors.warning || '#F59E0B',
+    backgroundColor: (colors.secondaryLight || colors.warning + '20') || '#FEF3C7',
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+    borderRadius: RADIUS.sm,
+    fontWeight: TYPOGRAPHY.medium,
   },
 })

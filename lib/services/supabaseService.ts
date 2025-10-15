@@ -379,6 +379,27 @@ class SupabaseService {
       } as PageWithWords
     }
     
+    // CRITICAL FIX: Ensure existing page is unlocked if it should be accessible
+    // Check if page should be unlocked based on notebook timeline
+    const shouldBeUnlocked = todaysPageNumber <= daysSinceCreation
+    
+    // If page should be unlocked but isn't, fix it in database
+    if (shouldBeUnlocked && !existingPage.is_unlocked) {
+      const { error: unlockError } = await supabase
+        .from('pages')
+        .update({
+          is_unlocked: true,
+          unlock_date: getCurrentDate().toISOString().split('T')[0]
+        })
+        .eq('id', existingPage.id)
+      
+      if (!unlockError) {
+        // Update the local object to reflect the change
+        existingPage.is_unlocked = true
+        existingPage.unlock_date = getCurrentDate().toISOString().split('T')[0]
+      }
+    }
+    
     return {
       ...existingPage,
       notebook
@@ -493,27 +514,21 @@ class SupabaseService {
         console.log(`    sentence_meaning: ${word.sentence_meaning}`)
       })
 
-      // Execute all operations in parallel
-      const [wordsResult, pageUpdateResult, profileUpdateResult] = await Promise.allSettled([
+      // Get notebook details to check words_per_day limit
+      const { data: notebook, error: notebookError } = await supabase
+        .from('notebooks')
+        .select('words_per_day')
+        .eq('id', page.notebook_id)
+        .single()
+
+      if (notebookError) throw notebookError
+      
+      const dailyWordLimit = notebook?.words_per_day || 20
+
+      // First: Insert words and get profile in parallel  
+      const [wordsResult, profileUpdateResult] = await Promise.allSettled([
         // Insert words
         supabase.from('words').insert(wordsToInsert),
-        
-        // Update page with word count and completion info
-        supabase.from('pages').update({
-          words_count: words.length,
-          is_completed: false,
-          next_review_date: (() => {
-            const currentDate = new Date(getCurrentDate())
-            currentDate.setHours(0, 0, 0, 0)
-            const reviewDate = new Date(currentDate.getTime() + 13 * 24 * 60 * 60 * 1000)
-            
-            // Use local date formatting to avoid timezone issues
-            const year = reviewDate.getFullYear()
-            const month = String(reviewDate.getMonth() + 1).padStart(2, '0')
-            const day = String(reviewDate.getDate()).padStart(2, '0')
-            return `${year}-${month}-${day}`
-          })()
-        }).eq('id', pageId),
         
         // Get current profile for stats update
         supabase.from('user_profiles').select('*').eq('user_id', user.id).single()
@@ -524,9 +539,16 @@ class SupabaseService {
         throw wordsResult.reason
       }
 
+      // Second: Update page with proper word count and completion logic (AFTER words are inserted)
+      const pageUpdateResult = await supabase.rpc('update_page_with_completion_check', {
+        p_page_id: pageId,
+        p_daily_limit: dailyWordLimit,
+        p_added_words_count: words.length
+      })
+
       // Check page update result
-      if (pageUpdateResult.status === 'rejected') {
-        console.warn('Failed to update page:', pageUpdateResult.reason)
+      if (pageUpdateResult.error) {
+        console.warn('Failed to update page completion:', pageUpdateResult.error)
       }
 
       console.log('👤 Updating profile stats...')
@@ -2760,6 +2782,198 @@ class SupabaseService {
 
       return data?.context_title || null
     }, 'getPageContext')
+  }
+
+  // =============================================
+  // NOTIFICATION SERVICES
+  // =============================================
+
+  // Get today's page for notification logic
+  async getTodayPage(notebookId: string, currentDate: Date): Promise<any | null> {
+    const dateString = currentDate.toISOString().split('T')[0]
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_today_page', {
+        notebook_id_param: notebookId,
+        current_date_param: dateString
+      })
+
+      if (error) {
+        console.error('Error getting today page:', error)
+        return null
+      }
+
+      return data?.[0] || null
+    }, 'getTodayPage')
+  }
+
+  // Get count of words ready for review for notification logic
+  async getWordsForReviewCount(notebookId: string, currentDate: Date): Promise<number> {
+    const dateString = currentDate.toISOString().split('T')[0]
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_review_words_count', {
+        notebook_id_param: notebookId,
+        current_date_param: dateString
+      })
+
+      if (error) {
+        console.error('Error getting review words count:', error)
+        return 0
+      }
+
+      return data || 0
+    }, 'getWordsForReviewCount')
+  }
+
+  // Check user activity for notification logic
+  async getUserActivityToday(userId: string, currentDate: Date): Promise<number> {
+    const dateString = currentDate.toISOString().split('T')[0]
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_user_activity_today', {
+        user_id_param: userId,
+        current_date_param: dateString
+      })
+
+      if (error) {
+        console.error('Error getting user activity today:', error)
+        return 0
+      }
+
+      return data || 0
+    }, 'getUserActivityToday')
+  }
+
+  // Store notification history
+  async storeNotificationHistory(notification: {
+    id: string
+    user_id: string
+    type: string
+    title: string
+    body: string
+    data: any
+    scheduled_at: string
+    sent_at: string | null
+  }): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase.rpc('store_notification_history', {
+        notification_id_param: notification.id,
+        user_id_param: notification.user_id,
+        type_param: notification.type,
+        title_param: notification.title,
+        body_param: notification.body,
+        data_param: notification.data,
+        scheduled_at_param: notification.scheduled_at,
+        sent_at_param: notification.sent_at
+      })
+
+      if (error) {
+        throw new Error(`Failed to store notification history: ${error.message}`)
+      }
+    }, 'storeNotificationHistory')
+  }
+
+  // Get user notification settings
+  async getUserNotificationSettings(userId: string): Promise<any> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_user_notification_settings', {
+        user_id_param: userId
+      })
+
+      if (error) {
+        throw new Error(`Failed to get notification settings: ${error.message}`)
+      }
+
+      return data?.[0] || null
+    }, 'getUserNotificationSettings')
+  }
+
+  // Update user notification settings
+  async updateUserNotificationSettings(userId: string, settings: any): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase
+        .from('user_notification_settings')
+        .upsert({
+          user_id: userId,
+          ...settings,
+          updated_at: new Date().toISOString()
+        })
+
+      if (error) {
+        throw new Error(`Failed to update notification settings: ${error.message}`)
+      }
+    }, 'updateUserNotificationSettings')
+  }
+
+  // Get notification history for user
+  async getNotificationHistory(userId: string, limit: number = 50, offset: number = 0): Promise<any[]> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_user_notification_history', {
+        user_id_param: userId,
+        limit_param: limit,
+        offset_param: offset
+      })
+
+      if (error) {
+        throw new Error(`Failed to get notification history: ${error.message}`)
+      }
+
+      return data || []
+    }, 'getNotificationHistory')
+  }
+
+  // Mark notification as read
+  async markNotificationRead(notificationId: string): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase.rpc('mark_notification_read', {
+        notification_id_param: notificationId
+      })
+
+      if (error) {
+        throw new Error(`Failed to mark notification as read: ${error.message}`)
+      }
+    }, 'markNotificationRead')
+  }
+
+  // Mark notification as clicked
+  async markNotificationClicked(notificationId: string): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase.rpc('mark_notification_clicked', {
+        notification_id_param: notificationId
+      })
+
+      if (error) {
+        throw new Error(`Failed to mark notification as clicked: ${error.message}`)
+      }
+    }, 'markNotificationClicked')
+  }
+
+  // Get unread notification count
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_unread_notification_count', {
+        user_id_param: userId
+      })
+
+      if (error) {
+        throw new Error(`Failed to get unread notification count: ${error.message}`)
+      }
+
+      return data || 0
+    }, 'getUnreadNotificationCount')
+  }
+
+  // Mark all notifications as read
+  async markAllNotificationsRead(userId: string): Promise<number> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('mark_all_notifications_read', {
+        user_id_param: userId
+      })
+
+      if (error) {
+        throw new Error(`Failed to mark all notifications as read: ${error.message}`)
+      }
+
+      return data || 0
+    }, 'markAllNotificationsRead')
   }
 
   // =============================================

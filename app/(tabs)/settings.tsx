@@ -15,15 +15,19 @@ import { useTheme } from '@/lib/contexts/ThemeContext'
 import { SharedHeader } from '@/components/shared-header'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { supabaseService } from '@/lib/services/supabaseService'
+import { notificationService } from '@/lib/services/notificationService'
 
 export default function SettingsScreen() {
   const router = useRouter()
   const { signOut, profile } = useAuth()
-  const { settings, updateSettings, refreshData } = useApp()
+  const { appState, settings, updateSettings, refreshData } = useApp()
   const { colors, toggleTheme, isDark } = useTheme()
   
-  const [localSettings, setLocalSettings] = useState(settings)
+  const [localSettings, setLocalSettings] = useState({
+    ...settings,
+  })
   const [isResetting, setIsResetting] = useState(false)
+  const [testingNotifications, setTestingNotifications] = useState(false)
 
   const handleSaveSettings = async () => {
     try {
@@ -55,6 +59,80 @@ export default function SettingsScreen() {
   const updateLocalSetting = (key: keyof typeof localSettings, value: any) => {
     setLocalSettings(prev => ({ ...prev, [key]: value }))
   }
+
+  const handleTestNotification = async (type: 'daily_words' | 'progress_reminder' | 'review_ready' | 'streak_protection') => {
+    if (testingNotifications) return
+
+    try {
+      setTestingNotifications(true)
+
+      // Test data for different notification types
+      const testData = {
+        daily_words: {
+          wordsCount: 20,
+          notebookLanguage: 'French'
+        },
+        progress_reminder: {
+          remaining: 8,
+          current: 12,
+          target: 20
+        },
+        review_ready: {
+          reviewCount: 15
+        },
+        streak_protection: {
+          streakCount: 7
+        }
+      }
+
+      await notificationService.triggerNotificationNow(type, testData[type])
+      
+      Alert.alert(
+        'Test Notification Sent!',
+        `A test ${type.replace('_', ' ')} notification has been sent.`,
+        [{ text: 'OK' }]
+      )
+    } catch (error) {
+      console.error('Error sending test notification:', error)
+      Alert.alert('Error', 'Failed to send test notification')
+    } finally {
+      setTestingNotifications(false)
+    }
+  }
+
+  const handleCheckScheduledNotifications = async () => {
+    try {
+      const scheduled = await notificationService.getScheduledNotifications()
+      
+      if (scheduled.length === 0) {
+        Alert.alert('No Scheduled Notifications', 'There are currently no notifications scheduled.')
+      } else {
+        const notificationList = scheduled.map((n, i) => 
+          `${i + 1}. ${n.content.title} (${n.trigger ? 'Scheduled' : 'Immediate'})`
+        ).join('\n')
+        
+        Alert.alert(
+          `${scheduled.length} Scheduled Notifications`,
+          notificationList,
+          [{ text: 'OK' }]
+        )
+      }
+    } catch (error) {
+      console.error('Error getting scheduled notifications:', error)
+      Alert.alert('Error', 'Failed to get scheduled notifications')
+    }
+  }
+
+  const handleCancelAllNotifications = async () => {
+    try {
+      await notificationService.cancelAllNotifications()
+      Alert.alert('Success', 'All scheduled notifications have been canceled.')
+    } catch (error) {
+      console.error('Error canceling notifications:', error)
+      Alert.alert('Error', 'Failed to cancel notifications')
+    }
+  }
+
 
   const handleResetUserData = async () => {
     Alert.alert(
@@ -101,7 +179,9 @@ export default function SettingsScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <SharedHeader title="Settings" />
+      <SharedHeader 
+        title="Settings" 
+      />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Profile Section */}
@@ -112,59 +192,6 @@ export default function SettingsScreen() {
             <View style={styles.profileInfo}>
               <Text style={styles.profileName}>{profile?.email || 'User'}</Text>
               <Text style={styles.profileEmail}>{profile?.email}</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Learning Settings */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Learning Settings</Text>
-          
-          <View style={styles.settingCard}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Daily Word Goal</Text>
-                <Text style={styles.settingDescription}>Number of new words to learn each day</Text>
-              </View>
-              <View style={styles.counter}>
-                <TouchableOpacity 
-                  style={styles.counterButton}
-                  onPress={() => updateLocalSetting('wordsPerDay', Math.max(5, localSettings.wordsPerDay - 5))}
-                >
-                  <Text style={styles.counterButtonText}>-</Text>
-                </TouchableOpacity>
-                <Text style={styles.counterValue}>{localSettings.wordsPerDay}</Text>
-                <TouchableOpacity 
-                  style={styles.counterButton}
-                  onPress={() => updateLocalSetting('wordsPerDay', Math.min(50, localSettings.wordsPerDay + 5))}
-                >
-                  <Text style={styles.counterButtonText}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.settingCard}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Review Interval</Text>
-                <Text style={styles.settingDescription}>Days between review sessions</Text>
-              </View>
-              <View style={styles.counter}>
-                <TouchableOpacity 
-                  style={styles.counterButton}
-                  onPress={() => updateLocalSetting('reviewIntervalDays', Math.max(7, localSettings.reviewIntervalDays - 1))}
-                >
-                  <Text style={styles.counterButtonText}>-</Text>
-                </TouchableOpacity>
-                <Text style={styles.counterValue}>{localSettings.reviewIntervalDays}</Text>
-                <TouchableOpacity 
-                  style={styles.counterButton}
-                  onPress={() => updateLocalSetting('reviewIntervalDays', Math.min(30, localSettings.reviewIntervalDays + 1))}
-                >
-                  <Text style={styles.counterButtonText}>+</Text>
-                </TouchableOpacity>
-              </View>
             </View>
           </View>
         </View>
@@ -203,25 +230,74 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          <View style={styles.settingCard}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Haptic Feedback</Text>
-                <Text style={styles.settingDescription}>Vibration feedback for interactions</Text>
-              </View>
-              <Switch
-                value={localSettings.enableHapticFeedback}
-                onValueChange={(value) => updateLocalSetting('enableHapticFeedback', value)}
-                trackColor={{ false: colors.gray200, true: colors.primaryLight }}
-                thumbColor={localSettings.enableHapticFeedback ? colors.primary : colors.gray400}
-              />
-            </View>
-          </View>
         </View>
+
 
         {/* Testing & Development */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Testing & Development</Text>
+          
+          {/* Notification Testing */}
+          {settings.enableNotifications && (
+            <View style={styles.settingCard}>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Notification Testing</Text>
+                  <Text style={styles.settingDescription}>Test different notification types in development</Text>
+                </View>
+              </View>
+              
+              <View style={styles.testButtonsContainer}>
+                <TouchableOpacity 
+                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
+                  onPress={() => handleTestNotification('daily_words')}
+                  disabled={testingNotifications}
+                >
+                  <Text style={styles.testButtonText}>📚 Daily Words</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
+                  onPress={() => handleTestNotification('progress_reminder')}
+                  disabled={testingNotifications}
+                >
+                  <Text style={styles.testButtonText}>🎯 Progress</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
+                  onPress={() => handleTestNotification('review_ready')}
+                  disabled={testingNotifications}
+                >
+                  <Text style={styles.testButtonText}>🔄 Review</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
+                  onPress={() => handleTestNotification('streak_protection')}
+                  disabled={testingNotifications}
+                >
+                  <Text style={styles.testButtonText}>🔥 Streak</Text>
+                </TouchableOpacity>
+              </View>
+              
+              <View style={styles.testButtonsContainer}>
+                <TouchableOpacity 
+                  style={styles.infoButton}
+                  onPress={handleCheckScheduledNotifications}
+                >
+                  <Text style={styles.infoButtonText}>View Scheduled</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.cancelButton}
+                  onPress={handleCancelAllNotifications}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel All</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
           
           <View style={styles.settingCard}>
             <View style={styles.settingRow}>
@@ -254,6 +330,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
     </View>
   )
 }
@@ -395,5 +472,55 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.background,
+  },
+  testButtonsContainer: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: SPACING.sm,
+    marginTop: SPACING.md,
+  },
+  testButton: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: colors.primary,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.sm,
+    alignItems: 'center' as const,
+  },
+  testButtonDisabled: {
+    opacity: 0.5,
+  },
+  testButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  infoButton: {
+    flex: 1,
+    backgroundColor: colors.info,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.sm,
+    alignItems: 'center' as const,
+    marginRight: SPACING.sm,
+  },
+  infoButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.medium,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: colors.warning,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.sm,
+    alignItems: 'center' as const,
+  },
+  cancelButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.medium,
   },
 })

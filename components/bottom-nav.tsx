@@ -27,10 +27,10 @@ export function BottomNav() {
       action: 'navigate',
     },
     {
-      name: 'Profile',
-      path: '/modal/settings',
-      icon: 'person.fill',
-      action: 'modal',
+      name: 'Settings',
+      path: '/(tabs)/settings',
+      icon: 'gearshape.fill',
+      action: 'navigate',
     },
   ]
 

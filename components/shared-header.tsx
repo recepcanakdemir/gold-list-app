@@ -10,9 +10,16 @@ interface SharedHeaderProps {
   showBackButton?: boolean
   showMenuButton?: boolean
   onMenuPress?: () => void
+  showSettingsButton?: boolean
 }
 
-export function SharedHeader({ title, showBackButton = false, showMenuButton = false, onMenuPress }: SharedHeaderProps) {
+export function SharedHeader({ 
+  title, 
+  showBackButton = false, 
+  showMenuButton = false, 
+  onMenuPress, 
+  showSettingsButton = false 
+}: SharedHeaderProps) {
   const router = useRouter()
   const { profile } = useAuth()
   const { colors } = useTheme()
@@ -49,6 +56,13 @@ export function SharedHeader({ title, showBackButton = false, showMenuButton = f
             <Text style={styles.notificationIconText}>🔔</Text>
           </View>
         </TouchableOpacity>
+        {showSettingsButton && (
+          <TouchableOpacity style={styles.settingsButton} onPress={() => router.push('/(tabs)/settings')}>
+            <View style={styles.settingsIcon}>
+              <Text style={styles.settingsIconText}>⚙️</Text>
+            </View>
+          </TouchableOpacity>
+        )}
         {showMenuButton && (
           <TouchableOpacity style={styles.menuButton} onPress={onMenuPress}>
             <Text style={styles.menuButtonText}>⋮</Text>
@@ -116,6 +130,21 @@ const createStyles = (colors: any) => StyleSheet.create({
     alignItems: 'center',
   },
   notificationIconText: {
+    fontSize: TYPOGRAPHY.lg,
+  },
+  settingsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  settingsIcon: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  settingsIconText: {
     fontSize: TYPOGRAPHY.lg,
   },
   centerTitle: {

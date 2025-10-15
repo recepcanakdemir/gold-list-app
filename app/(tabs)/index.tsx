@@ -8,6 +8,7 @@ import {
   RefreshControl,
   Dimensions,
   Alert,
+  AppState,
 } from 'react-native'
 import CountryFlag from 'react-native-country-flag'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -48,6 +49,9 @@ export default function HomeScreen() {
   // Throttling and loading guards - use refs to avoid dependency issues
   const isLoadingProgressRef = useRef(false)
   const lastProgressLoadTimeRef = useRef(0)
+  
+  // App state tracking for open app detection
+  const appStateRef = useRef(AppState.currentState)
   
   // Per-notebook progress tracking instead of global
   const [notebookProgressMap, setNotebookProgressMap] = useState<Map<string, {
@@ -128,6 +132,51 @@ export default function HomeScreen() {
       console.error('Error loading progress data:', error)
     }
   }
+
+  // Comprehensive refresh function for after actions (adding words, completing reviews)
+  const refreshHomeData = async () => {
+    if (!profile) return
+    
+    try {
+      // Refresh all data sources
+      await Promise.all([
+        loadProgressData(), // Weekly progress and today's progress
+        loadNotebookProgress(appState.notebooks), // Per-notebook progress
+      ])
+      
+      // Update word stats
+      const [totalCount, masteredCount] = await Promise.all([
+        supabaseService.getTotalWordsCount(),
+        supabaseService.getMasteredWordsCount()
+      ])
+      setRealWordStats({
+        totalWords: totalCount,
+        masteredWords: masteredCount
+      })
+      
+      // Refresh review availability
+      await checkAllNotebookReviews()
+    } catch (error) {
+      console.error('❌ Error refreshing home data:', error)
+    }
+  }
+
+  // AppState listener for app open detection
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: string) => {
+      // Only refresh when app comes from background to foreground
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        if (__DEV__) console.log('📱 App opened from background, setting refresh flag')
+        if (typeof window !== 'undefined') {
+          (window as any).appJustOpened = true
+        }
+      }
+      appStateRef.current = nextAppState
+    }
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange)
+    return () => subscription?.remove()
+  }, [])
 
   // Load progress for each notebook independently - PARALLEL LOADING for performance
   const loadNotebookProgress = useCallback(async (notebooks?: NotebookWithStats[]) => {
@@ -469,6 +518,32 @@ export default function HomeScreen() {
       const now = Date.now()
       const timeSinceLastFocus = now - lastFocusTime.current
       
+      // Check for action completion flags first
+      if (typeof window !== 'undefined') {
+        const wordsJustAdded = (window as any).wordsJustAdded
+        const reviewsJustCompleted = (window as any).reviewsJustCompleted
+        const appJustOpened = (window as any).appJustOpened
+        
+        if (wordsJustAdded || reviewsJustCompleted || appJustOpened) {
+          // Clear flags safely
+          try {
+            delete (window as any).wordsJustAdded
+            delete (window as any).reviewsJustCompleted
+            delete (window as any).appJustOpened
+          } catch (e) {
+            // Fallback if delete fails
+            (window as any).wordsJustAdded = undefined
+            (window as any).reviewsJustCompleted = undefined
+            (window as any).appJustOpened = undefined
+          }
+          
+          // Trigger refresh
+          refreshHomeData()
+          lastFocusTime.current = now
+          return // Skip normal focus logic
+        }
+      }
+      
       if (profile) {
         // Initial load
         if (!hasLoadedProgress) {
@@ -483,7 +558,7 @@ export default function HomeScreen() {
       }
       
       lastFocusTime.current = now
-    }, [profile, hasLoadedProgress, updateButtonState])
+    }, [profile, hasLoadedProgress, updateButtonState, refreshHomeData])
   )
 
   // Event-driven updates - no more polling!
@@ -1056,7 +1131,9 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
-        <SharedHeader title="Gold List" />
+        <SharedHeader 
+          title="Gold List" 
+        />
         
         {/* Daily Progress Widget */}
         {renderDailyProgressWidget()}

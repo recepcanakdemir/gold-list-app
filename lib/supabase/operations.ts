@@ -126,15 +126,35 @@ export const pageOperations = {
   },
 
   async markCompleted(id: string): Promise<void> {
-    const { error } = await supabase
+    // Get page to find notebook and check daily limit
+    const { data: page, error: pageError } = await supabase
       .from('pages')
-      .update({ 
-        is_completed: true,
-        next_review_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
-      })
+      .select('notebook_id')
       .eq('id', id)
-
-    if (error) throw error
+      .single()
+      
+    if (pageError) throw pageError
+    
+    // Get notebook daily word limit
+    const { data: notebook, error: notebookError } = await supabase
+      .from('notebooks')
+      .select('words_per_day')
+      .eq('id', page.notebook_id)
+      .single()
+      
+    if (notebookError) throw notebookError
+    
+    const dailyWordLimit = notebook?.words_per_day || 20
+    
+    // Use the RPC function to properly check completion
+    const { error: rpcError } = await supabase
+      .rpc('update_page_with_completion_check', {
+        p_page_id: id,
+        p_daily_limit: dailyWordLimit,
+        p_added_words_count: 0
+      })
+    
+    if (rpcError) throw rpcError
   }
 }
 

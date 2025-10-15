@@ -237,19 +237,43 @@ export const pageOperations = {
 
   // Mark page as completed and set review date
   async markCompleted(pageId: string, reviewIntervalDays: number = 14) {
-    const reviewDate = new Date()
-    reviewDate.setDate(reviewDate.getDate() + reviewIntervalDays)
+    // Get page to find notebook and check daily limit
+    const { data: page, error: pageError } = await supabase
+      .from('pages')
+      .select('notebook_id')
+      .eq('id', pageId)
+      .single()
+      
+    if (pageError) throw pageError
     
+    // Get notebook daily word limit
+    const { data: notebook, error: notebookError } = await supabase
+      .from('notebooks')
+      .select('words_per_day')
+      .eq('id', page.notebook_id)
+      .single()
+      
+    if (notebookError) throw notebookError
+    
+    const dailyWordLimit = notebook?.words_per_day || 20
+    
+    // Use the RPC function to properly check completion
+    const { error: rpcError } = await supabase
+      .rpc('update_page_with_completion_check', {
+        p_page_id: pageId,
+        p_daily_limit: dailyWordLimit,
+        p_added_words_count: 0
+      })
+    
+    if (rpcError) throw rpcError
+    
+    // Return the updated page
     const { data, error } = await supabase
       .from('pages')
-      .update({
-        is_completed: true,
-        next_review_date: reviewDate.toISOString().split('T')[0]
-      })
+      .select('*')
       .eq('id', pageId)
-      .select()
       .single()
-    
+      
     if (error) throw error
     return data
   },

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from './AuthContext'
+import { useDevTime } from './DevTimeContext'
 import { 
   AppState, 
   GoldListSettings, 
@@ -9,6 +10,7 @@ import {
   InputSession
 } from '../types/goldlist'
 import { supabaseService } from '../services/supabaseService'
+import { notificationService } from '../services/notificationService'
 
 interface AppContextType {
   appState: AppState
@@ -19,6 +21,8 @@ interface AppContextType {
   startReviewSession: (notebookId: string) => Promise<void>
   startInputSession: (notebookId: string, mode: 'focus' | 'fullpage') => Promise<void>
   updateNotebookLastUsed: (notebookId: string) => Promise<void>
+  scheduleNotifications: () => Promise<void>
+  refreshData?: () => Promise<void>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -45,6 +49,7 @@ interface AppProviderProps {
 
 export function AppProvider({ children }: AppProviderProps) {
   const { user, profile, refreshProfile } = useAuth()
+  const { getCurrentDate, isDevMode } = useDevTime()
   const [appState, setAppState] = useState<AppState>({
     user: null,
     notebooks: [],
@@ -71,6 +76,26 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }, [profile])
 
+  // Initialize notifications when user is authenticated
+  useEffect(() => {
+    if (user?.id && appState.settings.enableNotifications) {
+      console.log('🔔 Initializing notifications service...')
+      notificationService.initialize(user.id, isDevMode)
+        .then((success) => {
+          if (success) {
+            console.log('✅ Notifications initialized successfully')
+            // Schedule initial notifications
+            scheduleNotifications()
+          } else {
+            console.log('❌ Notification permissions denied')
+          }
+        })
+        .catch((error) => {
+          console.error('❌ Failed to initialize notifications:', error)
+        })
+    }
+  }, [user?.id, appState.settings.enableNotifications, isDevMode])
+
   const loadSettings = async () => {
     try {
       const stored = await AsyncStorage.getItem('goldlist_settings')
@@ -89,10 +114,37 @@ export function AppProvider({ children }: AppProviderProps) {
       const updatedSettings = { ...appState.settings, ...newSettings }
       await AsyncStorage.setItem('goldlist_settings', JSON.stringify(updatedSettings))
       setAppState(prev => ({ ...prev, settings: updatedSettings }))
+      
+      // If notifications setting changed, reschedule notifications
+      if ('enableNotifications' in newSettings && user?.id) {
+        if (updatedSettings.enableNotifications) {
+          // Re-initialize and schedule notifications
+          const success = await notificationService.initialize(user.id, isDevMode)
+          if (success) {
+            await scheduleNotifications()
+          }
+        } else {
+          // Cancel all notifications
+          await notificationService.cancelAllNotifications()
+        }
+      }
     } catch (error) {
       console.error('Error saving settings:', error)
     }
   }
+
+  const scheduleNotifications = useCallback(async () => {
+    if (!user?.id || !appState.settings.enableNotifications) return
+    
+    try {
+      console.log('📅 Scheduling notifications...')
+      const currentDate = getCurrentDate()
+      await notificationService.scheduleAllNotifications(appState.notebooks, profile, currentDate)
+      console.log('✅ Notifications scheduled successfully')
+    } catch (error) {
+      console.error('❌ Failed to schedule notifications:', error)
+    }
+  }, [user?.id, appState.settings.enableNotifications, appState.notebooks, profile, getCurrentDate])
 
   const refreshNotebooks = useCallback(async (skipProfileRefresh = false) => {
     if (!user?.id) return
@@ -230,6 +282,11 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }
 
+  const refreshData = useCallback(async () => {
+    await refreshNotebooks(false)
+    await scheduleNotifications()
+  }, [refreshNotebooks, scheduleNotifications])
+
   const value: AppContextType = {
     appState,
     settings: appState.settings,
@@ -239,6 +296,8 @@ export function AppProvider({ children }: AppProviderProps) {
     startReviewSession,
     startInputSession,
     updateNotebookLastUsed,
+    scheduleNotifications,
+    refreshData,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

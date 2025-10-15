@@ -582,14 +582,32 @@ export const mockDataService = {
       position_in_page: word.position_in_page,
     }))
 
-    // Update page completion
+    // Add new words to the mock data
+    mockWords.push(...newWords)
+
+    // Update page completion with proper logic
     const page = mockPages.find(p => p.id === pageId)
     if (page) {
-      page.words_count = words.length
-      page.is_completed = true
-      const reviewDate = new Date()
-      reviewDate.setDate(reviewDate.getDate() + 14)
-      page.next_review_date = reviewDate.toISOString().split('T')[0]
+      // Find the notebook to get daily word limit
+      const notebook = mockNotebooks.find(n => n.id === page.notebook.id)
+      const dailyWordLimit = notebook?.words_per_day || 20
+      
+      // Count total words on this page (existing + newly added)
+      const existingWords = mockWords.filter(w => w.page_id === pageId)
+      const totalWordsOnPage = existingWords.length + words.length
+      
+      // Update page with correct completion logic
+      page.words_count = totalWordsOnPage
+      page.is_completed = totalWordsOnPage >= dailyWordLimit
+      
+      // Only set review date if page is actually completed
+      if (page.is_completed) {
+        const reviewDate = new Date()
+        reviewDate.setDate(reviewDate.getDate() + 14)
+        page.next_review_date = reviewDate.toISOString().split('T')[0]
+      } else {
+        page.next_review_date = null
+      }
     }
 
     return newWords

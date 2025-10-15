@@ -70,13 +70,6 @@ function AppWithTheme() {
             }} 
           />
           <Stack.Screen 
-            name="modal/settings" 
-            options={{ 
-              title: 'Settings',
-              presentation: 'modal'
-            }} 
-          />
-          <Stack.Screen 
             name="modal/notebook-menu" 
             options={{ 
               title: 'Notebook Options',

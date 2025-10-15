@@ -25,7 +25,7 @@ interface PageData {
   id: string
   pageNumber: number
   round: number
-  status: 'locked' | 'available' | 'in_progress' | 'completed' | 'perfect'
+  status: 'locked' | 'available' | 'in_progress' | 'completed' | 'perfect' | 'missed'
   wordsCount: number
   actualWordsCount: number
   completedWords: number
@@ -202,14 +202,36 @@ export default function NotebookDetailsScreen() {
       let status: PageData['status'] = 'locked'
       let type: PageData['type'] = 'lesson'
 
+      // CRITICAL FAILSAFE: If page has words but shows as locked, force unlock
+      // This handles edge cases where database unlock status gets out of sync
+      let pageIsUnlocked = page.is_unlocked
+      
+      if (!pageIsUnlocked && totalWords > 0) {
+        // If page has words, it MUST have been unlocked at some point
+        pageIsUnlocked = true
+      }
+
       // Determine status based on unlock status and completion
-      if (page.is_unlocked) {
+      if (pageIsUnlocked) {
         if (page.is_completed) {
           status = completedWords === totalWords && totalWords > 0 ? 'perfect' : 'completed'
         } else if (totalWords > 0) {
           status = 'in_progress'
         } else {
-          status = 'available'
+          // Check if page was missed (day passed without words)
+          if (page.unlock_date) {
+            const unlockDate = new Date(page.unlock_date)
+            const currentDate = new Date(getCurrentDate())
+            const daysPassed = Math.floor((currentDate.getTime() - unlockDate.getTime()) / (24 * 60 * 60 * 1000))
+            
+            if (daysPassed >= 1) {
+              status = 'missed'
+            } else {
+              status = 'available'
+            }
+          } else {
+            status = 'available'
+          }
         }
       } else {
         status = 'locked'
@@ -311,8 +333,8 @@ export default function NotebookDetailsScreen() {
 
 
   const getPageColor = (page: PageData) => {
-    // If locked, always show gray
-    if (page.status === 'locked') return colors.gray300
+    // If locked or missed, always show gray
+    if (page.status === 'locked' || page.status === 'missed') return colors.gray300
     
     // Use Gold List Method round colors
     switch (page.round) {
@@ -325,8 +347,8 @@ export default function NotebookDetailsScreen() {
   }
 
   const getPageBorderColor = (page: PageData) => {
-    // If locked, always show darker gray
-    if (page.status === 'locked') return '#9CA3AF'
+    // If locked or missed, always show darker gray
+    if (page.status === 'locked' || page.status === 'missed') return '#9CA3AF'
     
     // Use darker versions for Duolingo-style borders
     switch (page.round) {
@@ -339,8 +361,8 @@ export default function NotebookDetailsScreen() {
   }
 
   const getPageBottomBorderColor = (page: PageData) => {
-    // If locked, always show darkest gray
-    if (page.status === 'locked') return '#6B7280'
+    // If locked or missed, always show darkest gray
+    if (page.status === 'locked' || page.status === 'missed') return '#6B7280'
     
     // Use darkest versions for bottom border depth
     switch (page.round) {
@@ -359,10 +381,32 @@ export default function NotebookDetailsScreen() {
       return
     }
 
-    // Check if page was already reviewed today
-    if (page.status === 'completed' && page.type === 'lesson') {
-      Alert.alert('Already Reviewed', 'This page has been reviewed today. Come back tomorrow for the next review!')
+    if (page.status === 'missed') {
+      Alert.alert('Page Missed', 'This page was missed because no words were added on its designated day.')
       return
+    }
+
+    // Check if page was already reviewed today - only show modal for actually reviewed pages
+    if (page.type === 'lesson' && page.actualWordsCount >= page.wordsCount) {
+      // Find the actual page data to check review status
+      const actualPage = pages.find(p => p.id === page.id)
+      const totalWords = actualPage?.words?.length || 0
+      const currentDate = new Date(getCurrentDate())
+      currentDate.setHours(0, 0, 0, 0)
+      
+      const hasWordsReviewedToday = totalWords > 0 && actualPage?.words?.some((word: any) => {
+        if (!word.last_reviewed) return false
+        const lastReviewedDate = new Date(word.last_reviewed)
+        lastReviewedDate.setHours(0, 0, 0, 0)
+        return currentDate.getTime() === lastReviewedDate.getTime()
+      })
+
+      if (hasWordsReviewedToday) {
+        Alert.alert('Already Reviewed', 'This page has been reviewed today. Come back tomorrow for the next review!')
+        return
+      }
+      // For completed but not reviewed pages, just open speech bubble (no modal)
+      // The speech bubble will show "Page Locked" with unclickable button
     }
 
     // Check if this is a virtual page (not created yet)
@@ -454,6 +498,23 @@ export default function NotebookDetailsScreen() {
   }
 
   const handleActionPress = (page: PageData) => {
+    // Check if page has reached word limit (completed but not reviewed)
+    if (page.type !== 'review' && page.actualWordsCount >= page.wordsCount) {
+      // Show proper completion modal, not "Already Reviewed"
+      Alert.alert(
+        'Page Complete!',
+        `This page has reached its daily word limit (${page.actualWordsCount}/${page.wordsCount} words). Come back in 14 days for your first review!`,
+        [
+          {
+            text: 'OK',
+            style: 'default'
+          }
+        ]
+      )
+      setSelectedPage(null)
+      return
+    }
+
     // All user-created notebooks are Bronze level
     // Check if this is a virtual page and handle accordingly
     if (page.id.startsWith('virtual-')) {
@@ -563,9 +624,9 @@ export default function NotebookDetailsScreen() {
             isSelected && styles.pageButtonSelected,
           ]}
           onPress={() => handlePagePress(page)}
-          disabled={page.status === 'locked'}
+          disabled={page.status === 'locked' || page.status === 'missed'}
         >
-          <Text style={styles.pageNumber}>{page.pageNumber}</Text>
+          <Text style={styles.pageNumber}>{page.status === 'missed' ? '✗' : page.pageNumber}</Text>
           {page.status === 'in_progress' && (
             <View style={styles.progressRing}>
               <View style={[styles.progressFill, { 
@@ -602,21 +663,15 @@ export default function NotebookDetailsScreen() {
                     // Special messaging for auto-focused pages
                     (page.type === 'review' ? 
                       `✨ Ready to review today's words!` :
-                      page.completedWords > 0 || page.actualWordsCount > 0 ?
-                      `✨ This page has words - ready for next review!` :
                       `✨ Add today's ${page.wordsCount} words here!`) :
                     // Normal messaging for manually selected pages
                     (page.type === 'review' ? 
                       `Words ready for review today` :
-                      page.allWordsMastered ?
-                      `All words mastered! 🎉` :
-                      page.daysUntilNextReview && page.daysUntilNextReview > 0 ?
-                      `Next review in ${page.daysUntilNextReview} day${page.daysUntilNextReview > 1 ? 's' : ''}` :
-                      page.status === 'completed' && page.type === 'lesson' ?
-                      `Reviewed today! Next review tomorrow` :
-                      page.completedWords > 0 || page.actualWordsCount > 0 ?
-                      `Page has words - next review coming soon` :
-                      `Add ${page.wordsCount} new words`)
+                      page.actualWordsCount >= page.wordsCount ?
+                      `Page complete! Ready for review in 14 days` :
+                      page.status === 'locked' ?
+                      `Page is locked` :
+                      `Add ${page.wordsCount - page.actualWordsCount} more words`)
                 })()}
               </Text>
               {(() => {
@@ -643,18 +698,44 @@ export default function NotebookDetailsScreen() {
                   )
                 }
                 
-                if (page.status === 'completed' && page.type === 'lesson') {
-                  return (
-                    <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
-                      <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
-                        Already Reviewed
-                      </Text>
-                    </View>
-                  )
+                // Handle completed pages: check if actually reviewed or just completed
+                if (page.type === 'lesson' && page.actualWordsCount >= page.wordsCount) {
+                  // Find the actual page data to check review status
+                  const actualPage = pages.find(p => p.id === page.id)
+                  const totalWords = actualPage?.words?.length || 0
+                  const currentDate = new Date(getCurrentDate())
+                  currentDate.setHours(0, 0, 0, 0)
+                  
+                  const hasWordsReviewedToday = totalWords > 0 && actualPage?.words?.some((word: any) => {
+                    if (!word.last_reviewed) return false
+                    const lastReviewedDate = new Date(word.last_reviewed)
+                    lastReviewedDate.setHours(0, 0, 0, 0)
+                    return currentDate.getTime() === lastReviewedDate.getTime()
+                  })
+
+                  if (hasWordsReviewedToday) {
+                    // Actually reviewed today
+                    return (
+                      <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                        <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                          Already Reviewed
+                        </Text>
+                      </View>
+                    )
+                  } else {
+                    // Completed but not reviewed - show Page Locked
+                    return (
+                      <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
+                        <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>
+                          Page Locked
+                        </Text>
+                      </View>
+                    )
+                  }
                 }
                 
-                // All notebooks are Bronze level
-                if ((page.completedWords > 0 || page.actualWordsCount > 0) && page.type !== 'review') {
+                // Show "Page Locked" for other locked states
+                if (page.type !== 'review' && (page.status === 'locked' || page.status === 'completed')) {
                   return (
                     <View style={[styles.actionButton, { backgroundColor: colors.gray300 }]}>
                       <Text style={[styles.actionButtonText, { color: colors.textSecondary }]}>

@@ -6,8 +6,8 @@ import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { DailyProgress } from '@/lib/types/goldlist'
-import { useRouter } from 'expo-router'
-import React, { useEffect, useMemo, useState } from 'react'
+import { useRouter, useFocusEffect } from 'expo-router'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import {
   Dimensions,
   RefreshControl,
@@ -16,6 +16,8 @@ import {
   Text,
   TouchableOpacity,
   View,
+  AppState,
+  AppStateStatus,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
@@ -144,12 +146,32 @@ export default function DashboardScreen() {
     totalMastered: 0
   })
   const insets = useSafeAreaInsets()
+  
+  // App state tracking for open app detection
+  const appStateRef = useRef(AppState.currentState)
 
   useEffect(() => {
     refreshNotebooks()
   }, [])
 
-  // Load dashboard data when profile becomes available or simulation day changes
+  // AppState listener for app open detection
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      // Only refresh when app comes from background to foreground
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        if (__DEV__) console.log('📱 Dashboard - App opened from background, setting refresh flag')
+        if (typeof window !== 'undefined') {
+          (window as any).appJustOpened = true
+        }
+      }
+      appStateRef.current = nextAppState
+    }
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange)
+    return () => subscription?.remove()
+  }, [])
+
+  // Load dashboard data only on initial profile load or simulation day changes
   useEffect(() => {
     if (profile) {
       loadDashboardData()
@@ -266,6 +288,53 @@ export default function DashboardScreen() {
     ])
     setRefreshing(false)
   }
+
+  // Smart focus-based updates: Only refresh when data actually changes
+  const [hasInitialLoad, setHasInitialLoad] = useState(false)
+  
+  useFocusEffect(
+    useCallback(() => {
+      // Check for data change flags first
+      if (typeof window !== 'undefined') {
+        const wordsJustAdded = (window as any).wordsJustAdded
+        const reviewsJustCompleted = (window as any).reviewsJustCompleted
+        const appJustOpened = (window as any).appJustOpened
+        
+        if (wordsJustAdded || reviewsJustCompleted || appJustOpened) {
+          if (__DEV__) console.log('📊 Dashboard refresh triggered by data change')
+          
+          // Clear flags safely
+          try {
+            if ((window as any).wordsJustAdded !== undefined) {
+              delete (window as any).wordsJustAdded
+            }
+            if ((window as any).reviewsJustCompleted !== undefined) {
+              delete (window as any).reviewsJustCompleted
+            }
+            if ((window as any).appJustOpened !== undefined) {
+              delete (window as any).appJustOpened
+            }
+          } catch (e) {
+            // Fallback if delete fails
+            (window as any).wordsJustAdded = undefined
+            (window as any).reviewsJustCompleted = undefined
+            (window as any).appJustOpened = undefined
+          }
+          
+          // Trigger refresh
+          loadDashboardData()
+          return // Skip normal focus logic
+        }
+      }
+      
+      // Initial load only
+      if (profile && !hasInitialLoad) {
+        if (__DEV__) console.log('📊 Dashboard initial focus load')
+        setHasInitialLoad(true)
+        // Initial load is already handled by useEffect with profile dependency
+      }
+    }, [profile, hasInitialLoad])
+  )
 
 
   // Gold List Method metrics - realistic dummy data
@@ -437,7 +506,9 @@ export default function DashboardScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
-        <SharedHeader title="Dashboard" />
+        <SharedHeader 
+          title="Dashboard" 
+        />
 
         {/* Section 1: Progress Overview Card */}
         <View style={styles.section1Card}>
