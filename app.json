@@ -10,8 +10,16 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.recepsienen.gold-list",
-      "appleTeamId": "3WL9FYSV99"
+      "bundleIdentifier": "com.recepsienen.goldlist",
+      "appleTeamId": "3WL9FYSV99",
+      "entitlements": {
+        "com.apple.developer.applesignin": [
+          "Default"
+        ]
+      },
+      "infoPlist": {
+        "NSUserTrackingUsageDescription": "This app uses tracking to provide personalized learning analytics and improve your vocabulary learning experience."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -41,7 +49,8 @@
           }
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true,

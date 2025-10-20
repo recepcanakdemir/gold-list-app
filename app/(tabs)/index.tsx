@@ -17,15 +17,18 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { NotebookWithStats } from '@/lib/types/goldlist'
+import { supabase } from '@/lib/supabase/client'
 // Removed unused badge imports
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import MaterialIcons from '@expo/vector-icons/MaterialIcons'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
+import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { SharedHeader } from '@/components/shared-header'
 import { DevTimeDisplay } from '@/components/DevTimeDisplay'
 import { LoadingIndicator } from '@/components/LoadingIndicator'
 import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
+import { useRouteProtection } from '@/lib/hooks/useRouteProtection'
 
 
 export default function HomeScreen() {
@@ -34,6 +37,8 @@ export default function HomeScreen() {
   const { appState, refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { colors, isDark } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
+  const { subscription, showPaywallModal } = useSubscription()
+  const { protectedNavigateToAddWords } = useRouteProtection()
   const [refreshing, setRefreshing] = useState(false)
   const screenWidth = Dimensions.get('window').width
   const [currentCarouselPage, setCurrentCarouselPage] = useState(0)
@@ -85,6 +90,24 @@ export default function HomeScreen() {
       updateButtonState('DAY_INIT')
     }
   }, [profile, updateButtonState]) // Only reload when profile changes
+
+  // Check if paywall should be shown on app launch
+  useEffect(() => {
+    if (profile && subscription) {
+      // Show paywall if user has never started trial and is not subscribed
+      const shouldShowPaywall = !subscription.isActive && 
+                                !subscription.isInTrial && 
+                                !subscription.trialStartedAt &&
+                                subscription.tier === 'free'
+      
+      if (shouldShowPaywall) {
+        // Small delay to ensure UI is ready
+        setTimeout(() => {
+          showPaywallModal()
+        }, 1000)
+      }
+    }
+  }, [profile, subscription, showPaywallModal])
 
   // Better change detection: use notebook data fingerprint instead of just IDs
   const notebookFingerprint = useMemo(() => {
@@ -384,15 +407,21 @@ export default function HomeScreen() {
   const handleAddWordsPress = async (route: string) => {
     // Extract notebook ID from route and update last used
     const notebookIdMatch = route.match(/\/notebook\/([^\/\?]+)/)
-    if (notebookIdMatch) {
-      updateNotebookLastUsed(notebookIdMatch[1])
+    if (!notebookIdMatch) {
+      console.error('Could not extract notebook ID from route:', route)
+      return
     }
+    
+    const notebookId = notebookIdMatch[1]
+    updateNotebookLastUsed(notebookId)
     
     setIsAddWordsButtonLoading(true)
     try {
       // Add a small delay to show loading state
       await new Promise(resolve => setTimeout(resolve, 300))
-      router.push(route)
+      
+      // Use protected navigation - will show paywall if user can't add words
+      await protectedNavigateToAddWords(notebookId)
     } finally {
       setIsAddWordsButtonLoading(false)
     }
@@ -568,6 +597,21 @@ export default function HomeScreen() {
   const getNotebookStatus = (notebook: NotebookWithStats) => {
     if (appState.notebooks.length === 0) return { type: 'no_notebook', text: 'Create Your First Notebook' }
     
+    // Priority 0: Day 201+ Celebration (highest priority)
+    const notebookCreated = new Date(notebook.created_at)
+    const today = getCurrentDate()
+    const daysSinceCreation = Math.floor(
+      (today.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
+    ) + 1
+
+    if (daysSinceCreation > 200) {
+      return { 
+        type: 'celebration', 
+        text: '🎉 200 Days Complete!', 
+        route: `/celebration/${notebook.id}` 
+      }
+    }
+    
     // Get progress for THIS specific notebook
     const notebookProgress = notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
     
@@ -633,6 +677,12 @@ export default function HomeScreen() {
     bronzeNotebookTitle: string
   }[]>>(new Map())
 
+  // Per-notebook stats state - stores real total and mastered words for each notebook
+  const [notebookStatsMap, setNotebookStatsMap] = useState<Map<string, {
+    totalWords: number
+    masteredWords: number
+  }>>(new Map())
+
   // Load badges for a specific notebook
   const loadNotebookBadges = async (notebookId: string) => {
     try {
@@ -682,6 +732,63 @@ export default function HomeScreen() {
       })
     }
   }
+
+  // Load real stats (total words and mastered words) for all notebooks
+  const loadNotebookStats = useCallback(async (notebooks: NotebookWithStats[]) => {
+    if (notebooks.length === 0) {
+      setNotebookStatsMap(new Map())
+      return
+    }
+
+    try {
+      console.log(`📊 Loading stats for ${notebooks.length} notebooks in parallel...`)
+      
+      const statsPromises = notebooks.map(async (notebook) => {
+        try {
+          // Query total words and mastered words for this specific notebook in parallel
+          const [totalWordsResult, masteredWordsResult] = await Promise.all([
+            supabase
+              .from('words')
+              .select('id', { count: 'exact' })
+              .eq('notebook_id', notebook.id),
+            supabase
+              .from('words')
+              .select('id', { count: 'exact' })
+              .eq('notebook_id', notebook.id)
+              .eq('is_mastered', true)
+          ])
+          
+          return {
+            notebookId: notebook.id,
+            stats: {
+              totalWords: totalWordsResult.count || 0,
+              masteredWords: masteredWordsResult.count || 0
+            }
+          }
+        } catch (error) {
+          console.error(`Error loading stats for notebook ${notebook.id}:`, error)
+          return {
+            notebookId: notebook.id,
+            stats: {
+              totalWords: 0,
+              masteredWords: 0
+            }
+          }
+        }
+      })
+      
+      const results = await Promise.all(statsPromises)
+      const statsMap = new Map()
+      results.forEach(({ notebookId, stats }) => {
+        statsMap.set(notebookId, stats)
+      })
+      setNotebookStatsMap(statsMap)
+      
+      console.log(`✅ Loaded stats for ${results.length} notebooks`)
+    } catch (error) {
+      console.error('Error loading notebook stats:', error)
+    }
+  }, [])
 
   // Load badges for ALL notebooks when notebooks change (with caching to prevent loops)
   const [lastBadgeLoadNotebookIds, setLastBadgeLoadNotebookIds] = useState<string>('')
@@ -987,7 +1094,12 @@ export default function HomeScreen() {
           {/* NEW DESIGN: Stats Row */}
           <View style={styles.statsRow}>
             <Text style={styles.totalWords}>
-              {notebook.totalWords || 0} total • {notebook.masteredWords || 0} mastered
+              {(() => {
+                const stats = notebookStatsMap.get(notebook.id)
+                return stats 
+                  ? `${stats.totalWords} total • ${stats.masteredWords} mastered`
+                  : '0 total • 0 mastered'
+              })()}
             </Text>
           </View>
 
@@ -1002,6 +1114,7 @@ export default function HomeScreen() {
                   notebookStatus.type === 'review' && styles.practiceButtonReview,
                   notebookStatus.type === 'add_words' && styles.practiceButtonAddWords,
                   notebookStatus.type === 'done' && styles.practiceButtonDone,
+                  notebookStatus.type === 'celebration' && styles.practiceButtonCelebration,
                   notebookStatus.type === 'info' && styles.practiceButtonInfo,
                 ]}
                 onPress={() => handlePracticeButtonPress(notebookStatus.route)}
@@ -1086,6 +1199,47 @@ export default function HomeScreen() {
     }
   }, [stats.totalWords, stats.masteredWords])
 
+  // Load stats for all notebooks when notebooks change
+  useEffect(() => {
+    if (appState.notebooks.length > 0) {
+      loadNotebookStats(appState.notebooks)
+    } else {
+      setNotebookStatsMap(new Map())
+    }
+  }, [appState.notebooks, loadNotebookStats])
+
+  // Trial Countdown Component
+  const renderTrialCountdown = () => {
+    // Only show during trial period
+    if (!subscription.isInTrial) {
+      return null
+    }
+
+    const daysLeft = subscription.trialDaysRemaining
+    const isLastDays = daysLeft <= 3
+
+    return (
+      <View style={[styles.trialBanner, isLastDays && styles.trialBannerUrgent]}>
+        <View style={styles.trialContent}>
+          <Text style={styles.trialTitle}>
+            🎉 Free Trial Active
+          </Text>
+          <Text style={styles.trialSubtitle}>
+            {daysLeft === 1 
+              ? 'Last day of full access' 
+              : `${daysLeft} days of full access remaining`}
+          </Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.upgradeButton}
+          onPress={() => showPaywallModal()}
+        >
+          <Text style={styles.upgradeButtonText}>Upgrade</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+
   // Daily Progress Widget Component
   const renderDailyProgressWidget = () => {
     // Use real weekly data instead of dummy data
@@ -1104,7 +1258,11 @@ export default function HomeScreen() {
               <Text style={styles.dailyProgressDay}>{day.day}</Text>
               <View style={[
                 styles.dailyProgressIndicator,
-                { backgroundColor: day.completed ? colors.primary : colors.gray200 }
+                { 
+                  backgroundColor: day.completed ? colors.primary : colors.gray200,
+                  borderWidth: 1,
+                  borderColor: colors.border
+                }
               ]}>
                 <Text style={[
                   styles.dailyProgressValue,
@@ -1134,6 +1292,9 @@ export default function HomeScreen() {
         <SharedHeader 
           title="Gold List" 
         />
+        
+        {/* Trial Countdown Banner */}
+        {renderTrialCountdown()}
         
         {/* Daily Progress Widget */}
         {renderDailyProgressWidget()}
@@ -1422,6 +1583,12 @@ const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
     borderBottomColor: '#276749',
     shadowColor: '#38A169',
     opacity: 0.8,
+  },
+  practiceButtonCelebration: {
+    backgroundColor: '#8B5CF6', // Purple for celebration
+    borderColor: '#7C3AED',
+    borderBottomColor: '#6D28D9',
+    shadowColor: '#8B5CF6',
   },
   practiceButtonTextDone: {
     color: colors.cardBackground,
@@ -2207,6 +2374,47 @@ const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
   },
   actionTextComplete: {
     color: isDark ? '#34D399' : '#059669',
+  },
+
+  // Trial Banner Styles
+  trialBanner: {
+    backgroundColor: colors.success,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    ...SHADOWS.sm,
+  },
+  trialBannerUrgent: {
+    backgroundColor: colors.warning,
+  },
+  trialContent: {
+    flex: 1,
+  },
+  trialTitle: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.white,
+    marginBottom: SPACING.xs,
+  },
+  trialSubtitle: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.white,
+    opacity: 0.9,
+  },
+  upgradeButton: {
+    backgroundColor: colors.white,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+  },
+  upgradeButtonText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.success,
   },
 
   // Daily Progress Widget Styles

@@ -5,6 +5,7 @@ import { useApp } from '@/lib/contexts/AppContext'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { geminiService } from '@/lib/services/geminiService'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { translationService } from '@/lib/services/translationService'
@@ -66,7 +67,8 @@ export default function WordInputScreen() {
   const { colors } = useTheme()
   const { refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { recordUserActivity, profile } = useAuth()
-  const { currentSimulatedDay } = useDevTime()
+  const { currentSimulatedDay, getCurrentDate } = useDevTime()
+  const { subscription, canAddWords, getUpgradeMessage, showPaywallModal, getUserState } = useSubscription()
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [mode, setMode] = useState<'focus' | 'fullpage'>('focus')
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -163,6 +165,19 @@ export default function WordInputScreen() {
       return
     }
 
+    // Check subscription for AI features
+    if (!subscription.isActive) {
+      Alert.alert(
+        'AI Features - Premium Only',
+        getUpgradeMessage('ai_features'),
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Upgrade', onPress: () => showPaywallModal() }
+        ]
+      )
+      return
+    }
+
     const key = getWordKey(word, meaning)
     
     // Set loading state
@@ -214,7 +229,7 @@ export default function WordInputScreen() {
       // Clear loading state
       setAiGenerationStates(prev => new Map(prev.set(key, false)))
     }
-  }, [notebook?.language, getWordKey])
+  }, [notebook?.language, getWordKey, subscription.isActive, getUpgradeMessage, showPaywallModal])
 
 
   const getAiState = useCallback((word: string, meaning: string) => {
@@ -329,6 +344,24 @@ export default function WordInputScreen() {
   useEffect(() => {
     loadNotebook()
   }, [id])
+
+  // Access control: block post-trial users from accessing input screen
+  useEffect(() => {
+    const userState = getUserState()
+    
+    if (userState === 'post-trial') {
+      console.log('🚫 Input Screen: Post-trial user detected, redirecting to paywall')
+      showPaywallModal()
+      
+      // Safe navigation: check if we can go back, otherwise go to dashboard
+      if (router.canGoBack()) {
+        router.back()
+      } else {
+        console.log('🚫 Input Screen: No previous screen, navigating to dashboard')
+        router.replace('/(tabs)/dashboard')
+      }
+    }
+  }, [getUserState, showPaywallModal, router])
 
   // Track streak changes for animation
   useEffect(() => {
@@ -476,25 +509,34 @@ export default function WordInputScreen() {
 
   const checkPageStatus = async () => {
     try {
-      const pageNumber = pageParam ? parseInt(pageParam) : 1
+      // Use DevTime-aware page detection instead of hardcoded page parameter
+      const currentDate = getCurrentDate()
+      const todaysPage = await supabaseService.getTodaysPage(id!)
       
-      // Check if this page already has words
-      const pages = await supabaseService.getPages(id!)
-      const currentPage = pages.find(p => p.page_number === pageNumber)
+      if (!todaysPage) {
+        console.error('Could not determine today\'s page')
+        setExistingWordCount(0)
+        setExistingWords([])
+        initializeWords()
+        return
+      }
       
       // Check if page is actually completed (at word limit) before blocking
       const dailyWordLimit = notebook?.words_per_day || 20
-      const currentWordCount = currentPage?.words?.length || 0
+      const currentWordCount = todaysPage.words?.length || 0
+      
+      console.log(`📄 DevTime Page Check: Day ${currentDate.toISOString().split('T')[0]} → Page ${todaysPage.page_number}`)
+      console.log(`📊 Word Count: ${currentWordCount}/${dailyWordLimit}`)
       
       // Store existing word count and words for position calculation and display
       setExistingWordCount(currentWordCount)
-      setExistingWords(currentPage?.words || [])
+      setExistingWords(todaysPage.words || [])
       
       if (currentWordCount >= dailyWordLimit) {
         // Page has reached word limit - show proper completion message
         Alert.alert(
           'Page Complete!',
-          `This page has reached its daily word limit (${currentWordCount}/${dailyWordLimit} words). Come back in 14 days for your first review!`,
+          `Page ${todaysPage.page_number} has reached its daily word limit (${currentWordCount}/${dailyWordLimit} words). Come back in 14 days for your first review!`,
           [
             {
               text: 'Back to Notebook',
@@ -508,7 +550,7 @@ export default function WordInputScreen() {
       }
       
       // Page is available for word input - initialize with existing words if any
-      initializeWords(currentPage)
+      initializeWords(todaysPage)
     } catch (error) {
       console.error('Error checking page status:', error)
       setExistingWordCount(0) // Reset to 0 for new pages
@@ -575,11 +617,17 @@ export default function WordInputScreen() {
     const newWords = [...words]
     const currentWord = newWords[index]
     
+    // Safety check to prevent undefined access
+    if (!currentWord) {
+      console.error(`updateWord: No word found at index ${index}`)
+      return
+    }
+    
     // Update the field
     newWords[index] = { ...currentWord, [field]: value }
     
     // Mark existing words as dirty when modified
-    if (currentWord.isExisting) {
+    if (currentWord?.isExisting) {
       newWords[index].isDirty = true
     }
     
@@ -724,6 +772,26 @@ export default function WordInputScreen() {
     if (wordsToSave.length === 0 && wordsToUpdate.length === 0) {
       Alert.alert('No Changes to Save', 'No new words added or existing words modified.')
       return
+    }
+
+    // Check subscription limits for new words (trial system)
+    if (wordsToSave.length > 0) {
+      const canAdd = await canAddWords()
+      if (!canAdd) {
+        const contextMessage = subscription.isInTrial 
+          ? 'Trial users can add unlimited words, but only to 1 notebook'
+          : 'Your trial has ended. Upgrade to continue adding new vocabulary'
+        
+        Alert.alert(
+          subscription.isInTrial ? 'Multiple Notebooks - Premium Only' : 'Trial Ended',
+          contextMessage,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Upgrade', onPress: () => showPaywallModal() }
+          ]
+        )
+        return
+      }
     }
 
     // Prepare data for save page - combine new and updated words
@@ -964,6 +1032,22 @@ export default function WordInputScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Post-Trial Warning Banner */}
+        {!subscription.isActive && !subscription.isInTrial && subscription.trialStartedAt && (
+          <View style={styles.postTrialBanner}>
+            <Text style={styles.postTrialTitle}>📖 Review Mode</Text>
+            <Text style={styles.postTrialMessage}>
+              Your trial has ended. You can review your existing vocabulary, but need to upgrade to add new words.
+            </Text>
+            <TouchableOpacity 
+              style={styles.upgradeFromBannerButton}
+              onPress={() => showPaywallModal()}
+            >
+              <Text style={styles.upgradeFromBannerText}>Upgrade Now</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Progress Bar - Now below header */}
         <View style={styles.progressSection}>
@@ -1674,6 +1758,42 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   keyboardView: {
     flex: 1,
+  },
+  
+  // Post-Trial Banner Styles
+  postTrialBanner: {
+    backgroundColor: colors.warning,
+    margin: SPACING.lg,
+    marginBottom: SPACING.md,
+    padding: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center',
+    ...SHADOWS.sm,
+  },
+  postTrialTitle: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.white,
+    marginBottom: SPACING.xs,
+  },
+  postTrialMessage: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.white,
+    textAlign: 'center',
+    opacity: 0.9,
+    marginBottom: SPACING.md,
+    lineHeight: 20,
+  },
+  upgradeFromBannerButton: {
+    backgroundColor: colors.white,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+  },
+  upgradeFromBannerText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.semibold,
+    color: colors.warning,
   },
   mainContent: {
     flex: 1,

@@ -203,7 +203,7 @@ class SupabaseService {
   }
 
   // Create a new notebook
-  async createNotebook(data: { title: string; language: string; language_code: string; words_per_day: number }): Promise<Notebook | null> {
+  async createNotebook(data: { title: string; language: string; language_code: string; words_per_day: number; notebook_level?: 'bronze' | 'silver' | 'gold' }): Promise<Notebook | null> {
     const user = await this.getCachedUser()
 
     console.log('📝 Creating notebook without bulk pages...')
@@ -216,7 +216,7 @@ class SupabaseService {
         language: data.language,
         language_code: data.language_code,
         words_per_day: data.words_per_day,
-        notebook_level: 'bronze', // Explicitly set all manually created notebooks as Bronze
+        notebook_level: data.notebook_level || 'bronze', // Use provided level or default to Bronze
         created_at: getCurrentDate().toISOString() // Use simulation time in dev, real time in production
       })
       .select()
@@ -305,6 +305,12 @@ class SupabaseService {
       (currentDateTime.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
     ) + 1 // Day 1, not Day 0
     const todaysPageNumber = daysSinceCreation
+
+    // Enforce 200-page limit - no pages beyond day 200
+    if (todaysPageNumber > 200) {
+      console.log(`📖 Notebook ${notebookId.slice(0, 8)} has reached 200-page limit (day ${todaysPageNumber})`)
+      return null // No page available beyond day 200
+    }
 
     // Check if today's page already exists
     let { data: existingPage, error: pageError } = await supabase
@@ -3023,6 +3029,318 @@ class SupabaseService {
       
       console.log(`✅ Complete user data reset completed for user ${userId.slice(0, 8)}`)
     }, 'resetUserData')
+  }
+
+  // =============================================
+  // SUBSCRIPTION & FREEMIUM SYSTEM
+  // =============================================
+
+  // Check if user can create a new notebook
+  async checkNotebookCreationLimit(userId: string, notebookLevel: string): Promise<boolean> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('check_notebook_creation_limit', {
+          p_user_id: userId,
+          p_notebook_level: notebookLevel
+        })
+
+      if (error) {
+        throw new Error(`Failed to check notebook creation limit: ${error.message}`)
+      }
+
+      return data || false
+    }, 'checkNotebookCreationLimit')
+  }
+
+  // Check if user can create a new page
+  async checkPageCreationLimit(notebookId: string): Promise<boolean> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('check_page_creation_limit', {
+          p_notebook_id: notebookId
+        })
+
+      if (error) {
+        throw new Error(`Failed to check page creation limit: ${error.message}`)
+      }
+
+      return data || false
+    }, 'checkPageCreationLimit')
+  }
+
+  // DEPRECATED: Old freemium function removed
+  // Word limits are now handled at page level, not user/subscription level
+  // Use page-specific word count checks in the input screen instead
+
+  // Archive notebook and reset for new cycle
+  async archiveAndResetNotebook(notebookId: string): Promise<{ archivedWordsCount: number, newCycleNumber: number }> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('archive_and_reset_notebook', {
+          p_notebook_id: notebookId
+        })
+
+      if (error) {
+        throw new Error(`Failed to archive and reset notebook: ${error.message}`)
+      }
+
+      if (!data || data.length === 0) {
+        throw new Error('No data returned from archive and reset operation')
+      }
+
+      return {
+        archivedWordsCount: data[0].archived_words_count,
+        newCycleNumber: data[0].new_cycle_number
+      }
+    }, 'archiveAndResetNotebook')
+  }
+
+  // Get archived words for a notebook
+  async getArchivedWords(notebookId: string): Promise<any[]> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('get_archived_words', {
+          p_notebook_id: notebookId
+        })
+
+      if (error) {
+        throw new Error(`Failed to get archived words: ${error.message}`)
+      }
+
+      return data || []
+    }, 'getArchivedWords')
+  }
+
+  // Get notebook archives summary
+  async getNotebookArchivesSummary(notebookId: string): Promise<any[]> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('get_notebook_archives_summary', {
+          p_notebook_id: notebookId
+        })
+
+      if (error) {
+        throw new Error(`Failed to get notebook archives summary: ${error.message}`)
+      }
+
+      return data || []
+    }, 'getNotebookArchivesSummary')
+  }
+
+  // Activate subscription with DevTime support
+  async activateSubscription(userId: string, subscriptionType: string, durationDays: number, currentDate?: Date): Promise<boolean> {
+    return withRetry(async () => {
+      console.log(`🔄 Activating subscription for user ${userId}: ${subscriptionType} (${durationDays} days)`)
+      console.log(`📅 Using date: ${currentDate ? currentDate.toISOString() : 'NOW() (server time)'}`)
+      
+      const params: any = {
+        p_user_id: userId,
+        p_subscription_type: subscriptionType,
+        p_duration_days: durationDays
+      }
+      
+      // Pass DevTime date if provided
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+      
+      const { data, error } = await supabase
+        .rpc('activate_subscription', params)
+
+      if (error) {
+        console.error(`❌ Subscription activation failed:`, error)
+        throw new Error(`Failed to activate subscription: ${error.message}`)
+      }
+
+      console.log(`✅ Subscription activated successfully: ${data}`)
+      return data || false
+    }, 'activateSubscription')
+  }
+
+  // Check if subscription is active
+  async isSubscriptionActive(userId: string): Promise<boolean> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('is_subscription_active', {
+          p_user_id: userId
+        })
+
+      if (error) {
+        throw new Error(`Failed to check subscription status: ${error.message}`)
+      }
+
+      return data || false
+    }, 'isSubscriptionActive')
+  }
+
+  // =============================================
+  // TRIAL SYSTEM FUNCTIONS
+  // =============================================
+
+  // Start free trial
+  async startFreeTrial(userId: string, currentDate?: Date): Promise<boolean> {
+    return withRetry(async () => {
+      const params: any = { p_user_id: userId }
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+
+      console.log(`🗄️ DB startFreeTrial: userId=${userId}`)
+      console.log(`🗄️ DB startFreeTrial: currentDate=${currentDate?.toISOString() || 'undefined'}`)
+      console.log(`🗄️ DB startFreeTrial: params=`, params)
+
+      const { data, error } = await supabase
+        .rpc('start_free_trial', params)
+
+      console.log(`🗄️ DB startFreeTrial: result=${data}, error=${error?.message || 'none'}`)
+
+      if (error) {
+        throw new Error(`Failed to start free trial: ${error.message}`)
+      }
+
+      return data || false
+    }, 'startFreeTrial')
+  }
+
+  // Check if user can create notebook (single notebook limit for trial/free)
+  async canCreateNotebookTrial(userId: string, currentDate?: Date): Promise<boolean> {
+    return withRetry(async () => {
+      const params: any = { p_user_id: userId }
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+      
+      const { data, error } = await supabase
+        .rpc('can_create_notebook_trial', params)
+
+      if (error) {
+        throw new Error(`Failed to check notebook creation limit: ${error.message}`)
+      }
+
+      return data || false
+    }, 'canCreateNotebookTrial')
+  }
+
+  // Check if user can add words (trial users: yes, post-trial: no)
+  async canAddWordsTrial(userId: string, currentDate?: Date): Promise<boolean> {
+    return withRetry(async () => {
+      const params: any = { p_user_id: userId }
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+
+      console.log(`🗄️ DB canAddWordsTrial: userId=${userId}`)
+      console.log(`🗄️ DB canAddWordsTrial: currentDate=${currentDate?.toISOString() || 'undefined'}`)
+      console.log(`🗄️ DB canAddWordsTrial: params=`, params)
+      
+      const { data, error } = await supabase
+        .rpc('can_add_words_trial', params)
+
+      console.log(`🗄️ DB canAddWordsTrial: result=${data}, error=${error?.message || 'none'}`)
+
+      if (error) {
+        throw new Error(`Failed to check word addition limit: ${error.message}`)
+      }
+
+      return data || false
+    }, 'canAddWordsTrial')
+  }
+
+  // Get trial days remaining
+  async getTrialDaysRemaining(userId: string, currentDate?: Date): Promise<number> {
+    return withRetry(async () => {
+      const params: any = { p_user_id: userId }
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+
+      console.log(`🗄️ DB getTrialDaysRemaining: userId=${userId}`)
+      console.log(`🗄️ DB getTrialDaysRemaining: currentDate=${currentDate?.toISOString() || 'undefined'}`)
+      console.log(`🗄️ DB getTrialDaysRemaining: params=`, params)
+      
+      const { data, error } = await supabase
+        .rpc('get_trial_days_remaining', params)
+
+      console.log(`🗄️ DB getTrialDaysRemaining: result=${data}, error=${error?.message || 'none'}`)
+
+      if (error) {
+        throw new Error(`Failed to get trial days remaining: ${error.message}`)
+      }
+
+      return data || 0
+    }, 'getTrialDaysRemaining')
+  }
+
+  // Check if user is in trial period
+  async isInTrialPeriod(userId: string, currentDate?: Date): Promise<boolean> {
+    return withRetry(async () => {
+      const params: any = { p_user_id: userId }
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+
+      console.log(`🗄️ DB isInTrialPeriod: userId=${userId}`)
+      console.log(`🗄️ DB isInTrialPeriod: currentDate=${currentDate?.toISOString() || 'undefined'}`)
+      console.log(`🗄️ DB isInTrialPeriod: params=`, params)
+      
+      const { data, error } = await supabase
+        .rpc('is_in_trial_period', params)
+
+      console.log(`🗄️ DB isInTrialPeriod: result=${data}, error=${error?.message || 'none'}`)
+
+      if (error) {
+        throw new Error(`Failed to check trial period: ${error.message}`)
+      }
+
+      return data || false
+    }, 'isInTrialPeriod')
+  }
+
+  // Debug trial status (for development)
+  async debugTrialStatus(userId: string, currentDate?: Date): Promise<any> {
+    return withRetry(async () => {
+      const params: any = { p_user_id: userId }
+      if (currentDate) {
+        params.p_current_date = currentDate.toISOString()
+      }
+
+      console.log(`🔍 DEBUG: Checking trial status for user ${userId}`)
+      console.log(`🔍 DEBUG: Using date ${currentDate?.toISOString() || 'NOW()'}`)
+
+      const { data, error } = await supabase
+        .rpc('debug_trial_status', params)
+
+      if (error) {
+        console.error('🔍 DEBUG: Error checking trial status:', error)
+        throw new Error(`Failed to debug trial status: ${error.message}`)
+      }
+
+      console.log(`🔍 DEBUG: Trial status result:`, data)
+      return data?.[0] || null
+    }, 'debugTrialStatus')
+  }
+
+  // Get user stats including archived words
+  async getUserStatsWithArchives(userId: string): Promise<any> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .rpc('get_user_stats_with_archives', {
+          p_user_id: userId
+        })
+
+      if (error) {
+        throw new Error(`Failed to get user stats with archives: ${error.message}`)
+      }
+
+      return data?.[0] || {
+        total_words_added: 0,
+        total_words_mastered: 0,
+        total_archived_words: 0,
+        total_archive_cycles: 0,
+        current_streak: 0,
+        longest_streak: 0
+      }
+    }, 'getUserStatsWithArchives')
   }
 }
 

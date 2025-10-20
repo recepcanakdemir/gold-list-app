@@ -15,10 +15,11 @@ import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { COLORS, TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
+import * as AppleAuthentication from 'expo-apple-authentication'
 
 export default function SignUpScreen() {
   const router = useRouter()
-  const { signUp } = useAuth()
+  const { signUp, signInWithApple } = useAuth()
   const { colors } = useTheme()
   const styles = createStyles(colors)
   
@@ -53,8 +54,8 @@ export default function SignUpScreen() {
       await signUp(email, password)
       Alert.alert(
         'Success!',
-        'Account created successfully. Please check your email for verification.',
-        [{ text: 'OK', onPress: () => router.replace('/(onboarding)/goldlist-intro') }]
+        'Account created successfully. You can now sign in with your email.',
+        [{ text: 'OK', onPress: () => router.replace('/(auth)/signin') }]
       )
     } catch (error: any) {
       Alert.alert('Sign Up Failed', error.message || 'An unexpected error occurred')
@@ -63,15 +64,14 @@ export default function SignUpScreen() {
     }
   }
 
-  const handleContinueWithApple = () => {
-    // In real app, implement Apple Sign In
-    console.log('Continue with Apple')
+  const handleContinueWithApple = async () => {
+    try {
+      await signInWithApple()
+    } catch (error: any) {
+      Alert.alert('Apple Sign In Failed', error.message || 'An error occurred')
+    }
   }
 
-  const handleContinueWithGoogle = () => {
-    // In real app, implement Google Sign In
-    console.log('Continue with Google')
-  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -155,21 +155,16 @@ export default function SignUpScreen() {
 
           {/* Social Login */}
           <View style={styles.socialSection}>
-            <TouchableOpacity 
-              style={styles.socialButton}
-              onPress={handleContinueWithApple}
-            >
-              <Text style={styles.appleIcon}>🍎</Text>
-              <Text style={styles.socialButtonText}>Continue with Apple</Text>
-            </TouchableOpacity>
+            {Platform.OS === 'ios' && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={RADIUS.lg}
+                style={styles.appleButton}
+                onPress={handleContinueWithApple}
+              />
+            )}
 
-            <TouchableOpacity 
-              style={styles.socialButton}
-              onPress={handleContinueWithGoogle}
-            >
-              <Text style={styles.googleIcon}>G</Text>
-              <Text style={styles.socialButtonText}>Continue with Google</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Sign In Link */}
@@ -307,30 +302,8 @@ const createStyles = (colors: any) => StyleSheet.create({
     gap: SPACING.lg,
     marginBottom: SPACING['2xl'],
   },
-  socialButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.cardBackground,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: RADIUS.lg,
-    paddingVertical: SPACING.lg,
-    gap: SPACING.md,
-    ...SHADOWS.sm,
-  },
-  appleIcon: {
-    fontSize: TYPOGRAPHY.lg,
-  },
-  googleIcon: {
-    fontSize: TYPOGRAPHY.lg,
-    fontWeight: TYPOGRAPHY.bold,
-    color: '#4285F4',
-  },
-  socialButtonText: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.medium,
-    color: colors.textPrimary,
+  appleButton: {
+    height: 48,
   },
   signInSection: {
     flexDirection: 'row',

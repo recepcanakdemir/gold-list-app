@@ -15,12 +15,13 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { LoadingIndicator } from '@/components/LoadingIndicator'
+import * as AppleAuthentication from 'expo-apple-authentication'
 
 export default function SignInScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const { signIn, signInWithGoogle, signInWithApple } = useAuth()
+  const { signIn, signInWithApple } = useAuth()
   const { colors } = useTheme()
   const styles = createStyles(colors)
 
@@ -40,13 +41,6 @@ export default function SignInScreen() {
     }
   }
 
-  const handleGoogleSignIn = async () => {
-    try {
-      await signInWithGoogle()
-    } catch (error: any) {
-      Alert.alert('Sign In Failed', error.message || 'An error occurred')
-    }
-  }
 
   const handleAppleSignIn = async () => {
     try {
@@ -125,13 +119,16 @@ export default function SignInScreen() {
               <View style={styles.dividerLine} />
             </View>
 
-            <TouchableOpacity style={styles.socialButton} onPress={handleAppleSignIn}>
-              <Text style={styles.socialButtonText}>🍎 Continue with Apple</Text>
-            </TouchableOpacity>
+            {Platform.OS === 'ios' && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={RADIUS.lg}
+                style={styles.appleButton}
+                onPress={handleAppleSignIn}
+              />
+            )}
 
-            <TouchableOpacity style={styles.socialButton} onPress={handleGoogleSignIn}>
-              <Text style={styles.socialButtonText}>🔍 Continue with Google</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Footer */}
@@ -252,23 +249,9 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.sm,
     color: colors.textSecondary,
   },
-  socialButton: {
+  appleButton: {
     height: 48,
-    // Duolingo-style 3D effect (lighter for secondary buttons)
-    borderWidth: 2,
-    borderBottomWidth: 3,
-    borderColor: colors.border,
-    borderRadius: RADIUS.lg,
-    justifyContent: 'center',
-    alignItems: 'center',
     marginBottom: SPACING.md,
-    backgroundColor: colors.cardBackground,
-    ...SHADOWS.sm,
-  },
-  socialButtonText: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.medium,
-    color: colors.textPrimary,
   },
   footer: {
     flexDirection: 'row',

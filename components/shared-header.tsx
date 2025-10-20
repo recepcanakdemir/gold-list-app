@@ -2,7 +2,8 @@ import React from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
-import { TYPOGRAPHY, SPACING } from '@/lib/constants/design'
+import { useSubscription } from '@/lib/contexts/SubscriptionContext'
+import { TYPOGRAPHY, SPACING, RADIUS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 
 interface SharedHeaderProps {
@@ -22,6 +23,7 @@ export function SharedHeader({
 }: SharedHeaderProps) {
   const router = useRouter()
   const { profile } = useAuth()
+  const { subscription, showPaywallModal } = useSubscription()
   const { colors } = useTheme()
   const styles = createStyles(colors)
 
@@ -47,6 +49,22 @@ export function SharedHeader({
       )}
       
       <View style={styles.headerRight}>
+        {/* Subscription Status Badge */}
+        <TouchableOpacity 
+          style={[
+            styles.subscriptionBadge,
+            subscription.isActive ? styles.premiumBadge : styles.freeBadge
+          ]}
+          onPress={() => !subscription.isActive && showPaywallModal()}
+        >
+          <Text style={[
+            styles.subscriptionText,
+            subscription.isActive ? styles.premiumText : styles.freeText
+          ]}>
+            {subscription.isActive ? '✨ Premium' : 'Free'}
+          </Text>
+        </TouchableOpacity>
+        
         <View style={styles.streakContainer}>
           <Text style={styles.streakIcon}>🔥</Text>
           <Text style={styles.streakCount}>{profile?.streak_count || 0}</Text>
@@ -174,5 +192,31 @@ const createStyles = (colors: any) => StyleSheet.create({
     includeFontPadding: false,
     textAlignVertical: 'center',
     marginTop: 4,
+  },
+  
+  // Subscription Badge Styles
+  subscriptionBadge: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.md,
+    marginRight: SPACING.sm,
+  },
+  premiumBadge: {
+    backgroundColor: colors.primary,
+  },
+  freeBadge: {
+    backgroundColor: colors.borderLight,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  subscriptionText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  premiumText: {
+    color: colors.white,
+  },
+  freeText: {
+    color: colors.textSecondary,
   },
 })

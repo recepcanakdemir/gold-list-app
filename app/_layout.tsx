@@ -7,6 +7,7 @@ import { AuthProvider } from '@/lib/contexts/AuthContext';
 import { AppProvider } from '@/lib/contexts/AppContext';
 import { ThemeProvider } from '@/lib/contexts/ThemeContext';
 import { DevTimeProvider } from '@/lib/contexts/DevTimeContext';
+import { SubscriptionProvider } from '@/lib/contexts/SubscriptionContext';
 import { DevTimeConnector } from '@/components/DevTimeConnector';
 import AuthGuard from '@/components/AuthGuard';
 
@@ -20,9 +21,11 @@ export default function RootLayout() {
       <DevTimeProvider>
         <ThemeProvider>
           <AuthProvider>
-            <AppProvider>
-              <AppWithTheme />
-            </AppProvider>
+            <SubscriptionProvider>
+              <AppProvider>
+                <AppWithTheme />
+              </AppProvider>
+            </SubscriptionProvider>
           </AuthProvider>
         </ThemeProvider>
       </DevTimeProvider>
@@ -74,6 +77,14 @@ function AppWithTheme() {
             options={{ 
               title: 'Notebook Options',
               presentation: 'modal'
+            }} 
+          />
+          <Stack.Screen 
+            name="paywall" 
+            options={{ 
+              title: 'Upgrade',
+              headerShown: false,
+              presentation: 'card'
             }} 
           />
         </Stack>

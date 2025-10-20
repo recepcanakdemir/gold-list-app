@@ -152,6 +152,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     console.log(`🔙 Day moved back from ${oldDay} to ${newDay}`)
   }
 
+
   const getSimulatedDaysElapsed = (): number => {
     return currentSimulatedDay + 1
   }

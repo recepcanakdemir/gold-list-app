@@ -9,9 +9,9 @@ export interface Database {
           avatar_url: string | null
           created_at: string
           updated_at: string
-          subscription_status: 'free' | 'weekly' | 'annual'
+          subscription_status: 'free' | 'weekly' | 'monthly' | 'yearly'
           subscription_expires_at: string | null
-          subscription_transaction_id: string | null
+          subscription_activated_at: string | null
           streak_count: number
           longest_streak: number
           streak_miss_count: number
@@ -28,9 +28,9 @@ export interface Database {
           avatar_url?: string | null
           created_at?: string
           updated_at?: string
-          subscription_status?: 'free' | 'weekly' | 'annual'
+          subscription_status?: 'free' | 'weekly' | 'monthly' | 'yearly'
           subscription_expires_at?: string | null
-          subscription_transaction_id?: string | null
+          subscription_activated_at?: string | null
           streak_count?: number
           longest_streak?: number
           streak_miss_count?: number
@@ -47,9 +47,9 @@ export interface Database {
           avatar_url?: string | null
           created_at?: string
           updated_at?: string
-          subscription_status?: 'free' | 'weekly' | 'annual'
+          subscription_status?: 'free' | 'weekly' | 'monthly' | 'yearly'
           subscription_expires_at?: string | null
-          subscription_transaction_id?: string | null
+          subscription_activated_at?: string | null
           streak_count?: number
           longest_streak?: number
           streak_miss_count?: number
@@ -202,6 +202,10 @@ export interface Database {
           cycle_count: number
           created_at: string
           updated_at: string
+          is_archived: boolean
+          archived_notebook_id: string | null
+          archived_at: string | null
+          archive_cycle_number: number
         }
         Insert: {
           id?: string
@@ -226,6 +230,10 @@ export interface Database {
           cycle_count?: number
           created_at?: string
           updated_at?: string
+          is_archived?: boolean
+          archived_notebook_id?: string | null
+          archived_at?: string | null
+          archive_cycle_number?: number
         }
         Update: {
           id?: string
@@ -250,6 +258,10 @@ export interface Database {
           cycle_count?: number
           created_at?: string
           updated_at?: string
+          is_archived?: boolean
+          archived_notebook_id?: string | null
+          archived_at?: string | null
+          archive_cycle_number?: number
         }
       }
       reviews: {
@@ -515,7 +527,7 @@ export interface Database {
       }
     }
     Enums: {
-      subscription_status: 'free' | 'weekly' | 'annual'
+      subscription_status: 'free' | 'weekly' | 'monthly' | 'yearly'
       notebook_level: 'bronze' | 'silver' | 'gold'
       word_status: 'learning' | 'mastered' | 'failed'
       round_number: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12

@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useApp } from '@/lib/contexts/AppContext'
+import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 
@@ -20,6 +21,7 @@ export default function NotebookMenuModal() {
   const { id, title } = useLocalSearchParams<{ id: string; title: string }>()
   const { colors } = useTheme()
   const { refreshNotebooks } = useApp()
+  const { subscription } = useSubscription()
   const [showEditTitle, setShowEditTitle] = useState(false)
   const [newTitle, setNewTitle] = useState(title || '')
   const [loading, setLoading] = useState(false)
@@ -86,6 +88,40 @@ export default function NotebookMenuModal() {
     } catch (error) {
       console.error('Error deleting notebook:', error)
       Alert.alert('Error', 'Failed to delete notebook. Please try again.')
+      setLoading(false)
+    }
+  }
+
+  const handleArchiveAndReset = () => {
+    Alert.alert(
+      'Archive & Reset Notebook',
+      `This will archive all current words and reset the notebook to start fresh with new pages. Your archived words will remain accessible for review. This action cannot be undone.
+
+Are you ready to start a new learning cycle with "${title}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Archive & Reset',
+          style: 'destructive',
+          onPress: confirmArchiveAndReset
+        }
+      ]
+    )
+  }
+
+  const confirmArchiveAndReset = async () => {
+    setLoading(true)
+    try {
+      const result = await supabaseService.archiveAndResetNotebook(id!)
+      await refreshNotebooks()
+      router.back()
+      Alert.alert(
+        'Archive Complete!', 
+        `Successfully archived ${result.archived_words_count} words and reset notebook for cycle ${result.new_cycle_number}. You can now start adding new vocabulary.`
+      )
+    } catch (error) {
+      console.error('Error archiving notebook:', error)
+      Alert.alert('Error', 'Failed to archive notebook. Please try again.')
       setLoading(false)
     }
   }
@@ -157,6 +193,18 @@ export default function NotebookMenuModal() {
             <Text style={styles.menuText}>Edit Title</Text>
           </View>
         </TouchableOpacity>
+
+        {!subscription.isActive && (
+          <TouchableOpacity style={styles.menuItem} onPress={handleArchiveAndReset} disabled={loading}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>📦</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>Archive & Reset</Text>
+                <Text style={styles.menuSubtext}>Start a fresh learning cycle</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={styles.menuItem} onPress={handleDeleteNotebook} disabled={loading}>
           <View style={styles.menuItemContent}>
@@ -269,6 +317,14 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.lg,
     color: colors.textPrimary,
     fontWeight: TYPOGRAPHY.medium,
+  },
+  menuTextContainer: {
+    flex: 1,
+  },
+  menuSubtext: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    marginTop: SPACING.xs,
   },
   deleteText: {
     color: colors.error,

@@ -4,6 +4,9 @@ import { supabase } from '../supabase/client'
 import { Tables } from '../types/database'
 import { profileOperations } from '../supabase/operations'
 import { supabaseService } from '../services/supabaseService'
+import * as AppleAuthentication from 'expo-apple-authentication'
+import { Platform } from 'react-native'
+
 
 interface AuthContextType {
   session: Session | null
@@ -13,7 +16,6 @@ interface AuthContextType {
   signUp: (email: string, password: string) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
-  signInWithGoogle: () => Promise<void>
   signInWithApple: () => Promise<void>
   refreshProfile: () => Promise<void>
   updateUserStreak: (hasActivity: boolean) => Promise<void>
@@ -44,6 +46,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Throttling for refreshProfile to prevent infinite loops
   const lastProfileRefreshRef = useRef(0)
   const isRefreshingProfileRef = useRef(false)
+
 
   useEffect(() => {
     // Set up global function for DevTime integration (avoids circular dependency)
@@ -93,6 +96,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
           streak_miss_count: 0,
           total_words_added: 0,
           total_words_mastered: 0,
+          onboarding_completed: false,
+          preferences: {},
         }
         userProfile = await profileOperations.create(newProfile)
       }
@@ -168,31 +173,85 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }
 
   async function signUp(email: string, password: string) {
+    console.log('🔐 AUTH: signUp function called with email:', email)
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signUp({
+      console.log('🔐 AUTH: Calling Supabase signUp...')
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
       })
-      if (error) throw error
+      console.log('🔐 AUTH: Supabase signUp response:', { 
+        data: {
+          user: data.user ? {
+            id: data.user.id,
+            email: data.user.email,
+            email_confirmed_at: data.user.email_confirmed_at,
+            created_at: data.user.created_at
+          } : null,
+          session: data.session ? 'session_exists' : null
+        }, 
+        error: error ? {
+          message: error.message,
+          status: error.status,
+          name: error.name
+        } : null 
+      })
+      
+      if (error) {
+        console.log('🔐 AUTH: SignUp error details:', {
+          message: error.message,
+          status: error.status,
+          name: error.name,
+          cause: error.cause
+        })
+        throw error
+      }
+      
+      // Check if user was actually created
+      if (data.user) {
+        console.log('🔐 AUTH: SignUp successful, user created with ID:', data.user.id)
+        console.log('🔐 AUTH: User email confirmation status:', data.user.email_confirmed_at ? 'confirmed' : 'pending')
+      } else {
+        console.log('🔐 AUTH: SignUp completed but no user object returned - this is suspicious!')
+      }
+      
+      // Check if session was created
+      if (data.session) {
+        console.log('🔐 AUTH: Session created for user')
+      } else {
+        console.log('🔐 AUTH: No session created - user may need email confirmation')
+      }
+      
     } catch (error) {
+      console.log('🔐 AUTH: SignUp catch block error:', error)
       throw error
     } finally {
+      console.log('🔐 AUTH: SignUp finally block, setting loading to false')
       setLoading(false)
     }
   }
 
   async function signIn(email: string, password: string) {
+    console.log('🔐 AUTH: signIn function called with email:', email)
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      console.log('🔐 AUTH: Calling Supabase signInWithPassword...')
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       })
-      if (error) throw error
+      console.log('🔐 AUTH: Supabase signIn response:', { data, error })
+      if (error) {
+        console.log('🔐 AUTH: SignIn error:', error)
+        throw error
+      }
+      console.log('🔐 AUTH: SignIn successful, user:', data.user?.id)
     } catch (error) {
+      console.log('🔐 AUTH: SignIn catch block error:', error)
       throw error
     } finally {
+      console.log('🔐 AUTH: SignIn finally block, setting loading to false')
       setLoading(false)
     }
   }
@@ -200,8 +259,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
   async function signOut() {
     setLoading(true)
     try {
+      // Sign out from Google if user was signed in with Google
+      if (Platform.OS === 'ios') {
+        try {
+          const isSignedIn = await GoogleSignin.isSignedIn()
+          if (isSignedIn) {
+            await GoogleSignin.signOut()
+          }
+        } catch (error) {
+          console.log('Google sign out error:', error)
+          // Continue with Supabase sign out even if Google sign out fails
+        }
+      }
+
+      // Sign out from Supabase
       const { error } = await supabase.auth.signOut()
       if (error) throw error
+      
+      setProfile(null)
     } catch (error) {
       throw error
     } finally {
@@ -209,30 +284,120 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
-  async function signInWithGoogle() {
-    setLoading(true)
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-      })
-      if (error) throw error
-    } catch (error) {
-      throw error
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function signInWithApple() {
+    console.log('🍎 APPLE AUTH: signInWithApple function called')
+    
+    if (Platform.OS !== 'ios') {
+      console.log('🍎 APPLE AUTH: Error - Not iOS platform')
+      throw new Error('Apple Sign-In is only available on iOS')
+    }
+
+    console.log('🍎 APPLE AUTH: Setting loading to true')
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'apple',
+      console.log('🍎 APPLE AUTH: Checking if Apple Sign-In is available...')
+      // Check if Apple Sign-In is available
+      const isAvailable = await AppleAuthentication.isAvailableAsync()
+      console.log('🍎 APPLE AUTH: Apple Sign-In available:', isAvailable)
+      
+      if (!isAvailable) {
+        console.log('🍎 APPLE AUTH: Error - Apple Sign-In not available')
+        throw new Error('Apple Sign-In is not available on this device')
+      }
+
+      console.log('🍎 APPLE AUTH: Requesting Apple authentication...')
+      // Request Apple authentication
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
       })
-      if (error) throw error
-    } catch (error) {
+      console.log('🍎 APPLE AUTH: Apple credential received:', {
+        user: credential.user,
+        email: credential.email,
+        fullName: credential.fullName,
+        hasIdentityToken: !!credential.identityToken,
+        nonce: credential.nonce,
+        state: credential.state,
+        authorizationCode: credential.authorizationCode ? 'present' : 'missing'
+      })
+      
+      // Log detailed fullName structure
+      if (credential.fullName) {
+        console.log('🍎 APPLE AUTH: Full name details:', {
+          givenName: credential.fullName.givenName,
+          familyName: credential.fullName.familyName,
+          middleName: credential.fullName.middleName,
+          namePrefix: credential.fullName.namePrefix,
+          nameSuffix: credential.fullName.nameSuffix,
+          nickname: credential.fullName.nickname
+        })
+      }
+
+      console.log('🍎 APPLE AUTH: Calling Supabase signInWithIdToken...')
+      // Sign in to Supabase with the Apple credential
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken!,
+        nonce: credential.nonce,
+      })
+      console.log('🍎 APPLE AUTH: Supabase response:', { 
+        data: data ? {
+          user: data.user ? {
+            id: data.user.id,
+            email: data.user.email,
+            app_metadata: data.user.app_metadata,
+            user_metadata: data.user.user_metadata,
+            created_at: data.user.created_at
+          } : null,
+          session: data.session ? 'session_exists' : null
+        } : null,
+        error: error ? {
+          message: error.message,
+          status: error.status
+        } : null
+      })
+
+      if (error) {
+        console.log('🍎 APPLE AUTH: Supabase error:', error)
+        throw error
+      }
+
+      console.log('🍎 APPLE AUTH: Supabase sign-in successful, user:', data.user?.id)
+
+      // Update profile with Apple-specific data if available
+      if (data.user && credential.fullName) {
+        console.log('🍎 APPLE AUTH: Updating user profile with Apple data...')
+        const displayName = [
+          credential.fullName.givenName,
+          credential.fullName.familyName
+        ].filter(Boolean).join(' ')
+
+        if (displayName) {
+          console.log('🍎 APPLE AUTH: Setting display name:', displayName)
+          await supabase.auth.updateUser({
+            data: { 
+              display_name: displayName,
+              auth_provider: 'apple',
+              apple_user_id: credential.user
+            }
+          })
+          console.log('🍎 APPLE AUTH: User profile updated successfully')
+        }
+      }
+
+    } catch (error: any) {
+      console.log('🍎 APPLE AUTH: Catch block error:', error)
+      if (error.code === 'ERR_REQUEST_CANCELED') {
+        console.log('🍎 APPLE AUTH: User canceled sign-in')
+        // User canceled the sign-in flow
+        return
+      }
       throw error
     } finally {
+      console.log('🍎 APPLE AUTH: Finally block, setting loading to false')
       setLoading(false)
     }
   }
@@ -349,7 +514,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signUp,
     signIn,
     signOut,
-    signInWithGoogle,
     signInWithApple,
     refreshProfile,
     updateUserStreak,

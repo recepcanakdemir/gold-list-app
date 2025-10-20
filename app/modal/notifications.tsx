@@ -13,6 +13,7 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
+import { useRouteProtection } from '@/lib/hooks/useRouteProtection'
 
 interface Notification {
   id: string
@@ -35,6 +36,7 @@ export default function NotificationsScreen() {
   const router = useRouter()
   const { user } = useAuth()
   const { colors } = useTheme()
+  const { protectedNavigateToAddWords } = useRouteProtection()
   const [notifications, setNotifications] = useState<NotificationDisplay[]>([])
   const [loading, setLoading] = useState(true)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -129,7 +131,8 @@ export default function NotificationsScreen() {
         switch (notification.type) {
           case 'daily_words':
           case 'progress_reminder':
-            router.push(`/notebook/${notebookId}/input`)
+            // Use protected navigation for word addition
+            await protectedNavigateToAddWords(notebookId)
             break
           case 'review_ready':
             router.push(`/notebook/${notebookId}/review`)

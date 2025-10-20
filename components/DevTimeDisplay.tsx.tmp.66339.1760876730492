@@ -100,21 +100,57 @@ export function DevTimeDisplay() {
           {/* Day Navigation */}
           <View style={styles.dayNavigation}>
             <TouchableOpacity 
-              style={[styles.navButton, { opacity: currentSimulatedDay === 0 || isAdvancing ? 0.3 : 1 }]}
+              style={[styles.navButton, { opacity: currentSimulatedDay === 0 || isAdvancing || isJumping ? 0.3 : 1 }]}
               onPress={() => handlePreviousDay()}
-              disabled={currentSimulatedDay === 0 || isAdvancing}
+              disabled={currentSimulatedDay === 0 || isAdvancing || isJumping}
             >
               <Text style={styles.navButtonText}>{isAdvancing ? '⏳ Loading...' : '◀ Previous Day'}</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
-              style={[styles.navButton, { opacity: isAdvancing ? 0.3 : 1 }]}
+              style={[styles.navButton, { opacity: isAdvancing || isJumping ? 0.3 : 1 }]}
               onPress={() => handleNextDay()}
-              disabled={isAdvancing}
+              disabled={isAdvancing || isJumping}
             >
               <Text style={styles.navButtonText}>{isAdvancing ? '⏳ Loading...' : 'Next Day ▶'}</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Quick Jump Navigation */}
+          <View style={styles.jumpNavigation}>
+            <TouchableOpacity 
+              style={[styles.jumpButton, { opacity: isAdvancing || isJumping ? 0.3 : 1 }]}
+              onPress={() => handleJumpDays(7)}
+              disabled={isAdvancing || isJumping}
+            >
+              <Text style={styles.jumpButtonText}>{isJumping ? '⏳ Jumping...' : '+7 Days'}</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.jumpButton, styles.primaryJumpButton, { opacity: isAdvancing || isJumping ? 0.3 : 1 }]}
+              onPress={() => handleJumpDays(14)}
+              disabled={isAdvancing || isJumping}
+            >
+              <Text style={[styles.jumpButtonText, styles.primaryJumpText]}>{isJumping ? '⏳ Jumping...' : '+14 Days 🚀'}</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.jumpButton, { opacity: isAdvancing || isJumping ? 0.3 : 1 }]}
+              onPress={() => handleJumpDays(30)}
+              disabled={isAdvancing || isJumping}
+            >
+              <Text style={styles.jumpButtonText}>{isJumping ? '⏳ Jumping...' : '+30 Days'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Jump Progress Indicator */}
+          {isJumping && (
+            <View style={styles.progressContainer}>
+              <Text style={styles.progressText}>
+                Jumping {jumpProgress.total} days... Please wait
+              </Text>
+            </View>
+          )}
 
 
           {/* Control Buttons */}
@@ -247,5 +283,50 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingVertical: SPACING.md,
     alignItems: 'center',
     ...SHADOWS.sm,
+  },
+  jumpNavigation: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.md,
+    gap: SPACING.xs,
+  },
+  jumpButton: {
+    flex: 1,
+    backgroundColor: colors.cardBackground,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: SPACING.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...SHADOWS.sm,
+  },
+  primaryJumpButton: {
+    backgroundColor: colors.primary + '20',
+    borderColor: colors.primary,
+    borderWidth: 2,
+  },
+  jumpButtonText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: TYPOGRAPHY.medium,
+    color: colors.textPrimary,
+  },
+  primaryJumpText: {
+    color: colors.primary,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  progressContainer: {
+    backgroundColor: colors.warning + '20' || colors.secondary + '20',
+    borderRadius: RADIUS.md,
+    padding: SPACING.sm,
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+    borderWidth: 1,
+    borderColor: colors.warning || colors.secondary,
+  },
+  progressText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.medium,
+    color: colors.warning || colors.secondary,
   },
 })
