@@ -8,6 +8,7 @@ import { AppProvider } from '@/lib/contexts/AppContext';
 import { ThemeProvider } from '@/lib/contexts/ThemeContext';
 import { DevTimeProvider } from '@/lib/contexts/DevTimeContext';
 import { SubscriptionProvider } from '@/lib/contexts/SubscriptionContext';
+import { QueryProvider } from '@/lib/contexts/QueryProvider';
 import { DevTimeConnector } from '@/components/DevTimeConnector';
 import AuthGuard from '@/components/AuthGuard';
 
@@ -21,11 +22,13 @@ export default function RootLayout() {
       <DevTimeProvider>
         <ThemeProvider>
           <AuthProvider>
-            <SubscriptionProvider>
-              <AppProvider>
-                <AppWithTheme />
-              </AppProvider>
-            </SubscriptionProvider>
+            <QueryProvider>
+              <SubscriptionProvider>
+                <AppProvider>
+                  <AppWithTheme />
+                </AppProvider>
+              </SubscriptionProvider>
+            </QueryProvider>
           </AuthProvider>
         </ThemeProvider>
       </DevTimeProvider>

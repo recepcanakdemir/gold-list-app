@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabaseService } from '@/lib/services/supabaseService'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 interface DevTimeContextType {
   isSimulationActive: boolean
@@ -175,7 +175,7 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     const dayOffset = currentSimulatedDay
     simulatedDate.setDate(simulatedDate.getDate() + dayOffset)
     
-    console.log(`🕰️ DevTime: Simulation active, day ${currentSimulatedDay}, returning: ${simulatedDate.toISOString()}`)
+    //console.log(`🕰️ DevTime: Simulation active, day ${currentSimulatedDay}, returning: ${simulatedDate.toISOString()}`)
     
     return simulatedDate
   }

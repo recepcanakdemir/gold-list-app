@@ -34,7 +34,7 @@ import { useRouteProtection } from '@/lib/hooks/useRouteProtection'
 export default function HomeScreen() {
   const router = useRouter()
   const { profile } = useAuth()
-  const { appState, refreshNotebooks, updateNotebookLastUsed } = useApp()
+  const { appState, refreshNotebooks, updateNotebookLastUsed, addEventListener, emitEvent } = useApp()
   const { colors, isDark } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
   const { subscription, showPaywallModal } = useSubscription()
@@ -102,8 +102,15 @@ export default function HomeScreen() {
       
       if (shouldShowPaywall) {
         // Small delay to ensure UI is ready
+        // Only show if not during state updates (prevents race conditions)
         setTimeout(() => {
-          showPaywallModal()
+          // Check if we're still in pre-trial state (avoid showing during transitions)
+          if (!subscription.isActive && !subscription.isInTrial && subscription.tier === 'free') {
+            console.log('📱 Index page: Showing paywall for pre-trial user')
+            showPaywallModal()
+          } else {
+            console.log('📱 Index page: Subscription state changed, skipping paywall')
+          }
         }, 1000)
       }
     }
@@ -189,10 +196,8 @@ export default function HomeScreen() {
     const handleAppStateChange = (nextAppState: string) => {
       // Only refresh when app comes from background to foreground
       if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-        if (__DEV__) console.log('📱 App opened from background, setting refresh flag')
-        if (typeof window !== 'undefined') {
-          (window as any).appJustOpened = true
-        }
+        if (__DEV__) console.log('📱 App opened from background, emitting app opened event')
+        emitEvent('appOpened', {})
       }
       appStateRef.current = nextAppState
     }
@@ -349,13 +354,25 @@ export default function HomeScreen() {
     checkAllNotebookReviews()
   }, [])
 
-  // Expose these functions globally for other components to use
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
-      ;(window as any).onWordsAdded = onWordsAdded
-      ;(window as any).onReviewsCompleted = onReviewsCompleted
+  // Event listeners for data changes (replaces global function exposure)
+  useEffect(() => {
+    const handleWordsAdded = (data: { notebookId: string; wordCount: number }) => {
+      onWordsAdded(data.notebookId, data.wordCount)
     }
-  }, [onWordsAdded, onReviewsCompleted])
+
+    const handleReviewsCompleted = () => {
+      onReviewsCompleted()
+    }
+
+    // Set up event listeners
+    const cleanupWords = addEventListener('wordsAdded', handleWordsAdded)
+    const cleanupReviews = addEventListener('reviewsCompleted', handleReviewsCompleted)
+
+    return () => {
+      cleanupWords()
+      cleanupReviews()
+    }
+  }, [addEventListener, onWordsAdded, onReviewsCompleted])
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -542,36 +559,32 @@ export default function HomeScreen() {
   const [hasLoadedProgress, setHasLoadedProgress] = useState(false)
   const lastFocusTime = useRef(0)
   
+  // Event listeners for focus-based refresh (replaces window global checks)
+  useEffect(() => {
+    const handleDataChange = () => {
+      if (__DEV__) console.log('📱 Home refresh triggered by dataChanged event')
+      refreshHomeData()
+    }
+
+    const handleAppOpened = () => {
+      if (__DEV__) console.log('📱 Home refresh triggered by appOpened event')
+      refreshHomeData()
+    }
+
+    // Set up event listeners
+    const cleanupData = addEventListener('dataChanged', handleDataChange)
+    const cleanupApp = addEventListener('appOpened', handleAppOpened)
+
+    return () => {
+      cleanupData()
+      cleanupApp()
+    }
+  }, [addEventListener, refreshHomeData])
+
   useFocusEffect(
     useCallback(() => {
       const now = Date.now()
       const timeSinceLastFocus = now - lastFocusTime.current
-      
-      // Check for action completion flags first
-      if (typeof window !== 'undefined') {
-        const wordsJustAdded = (window as any).wordsJustAdded
-        const reviewsJustCompleted = (window as any).reviewsJustCompleted
-        const appJustOpened = (window as any).appJustOpened
-        
-        if (wordsJustAdded || reviewsJustCompleted || appJustOpened) {
-          // Clear flags safely
-          try {
-            delete (window as any).wordsJustAdded
-            delete (window as any).reviewsJustCompleted
-            delete (window as any).appJustOpened
-          } catch (e) {
-            // Fallback if delete fails
-            (window as any).wordsJustAdded = undefined
-            (window as any).reviewsJustCompleted = undefined
-            (window as any).appJustOpened = undefined
-          }
-          
-          // Trigger refresh
-          refreshHomeData()
-          lastFocusTime.current = now
-          return // Skip normal focus logic
-        }
-      }
       
       if (profile) {
         // Initial load
@@ -587,7 +600,7 @@ export default function HomeScreen() {
       }
       
       lastFocusTime.current = now
-    }, [profile, hasLoadedProgress, updateButtonState, refreshHomeData])
+    }, [profile, hasLoadedProgress, updateButtonState])
   )
 
   // Event-driven updates - no more polling!

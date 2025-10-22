@@ -63,7 +63,7 @@ export default function ReviewScreen() {
   const { id, round, page } = useLocalSearchParams<{ id: string; round?: string; page?: string }>()
   const { colors } = useTheme()
   const { getCurrentDate } = useDevTime()
-  const { updateNotebookLastUsed } = useApp()
+  const { updateNotebookLastUsed, emitEvent } = useApp()
   const { recordUserActivity, profile } = useAuth()
   
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
@@ -907,12 +907,13 @@ export default function ReviewScreen() {
   const handleCompletionDone = () => {
     setShowCompletionScreen(false)
     
-    // Set a flag that reviews were completed for home screen to detect
-    if (typeof window !== 'undefined') {
-      (window as any).reviewsJustCompleted = true
-    }
+    // Emit review completion event for home screen to update notebook status
+    emitEvent('reviewsCompleted', { 
+      notebookId: id!, 
+      reviewCount: reviewResults.remembered.length + reviewResults.forgotten.length 
+    })
     
-    // Navigate back with a small delay to ensure flag is set
+    // Navigate back with a small delay to ensure event is processed
     setTimeout(() => {
       if (router.canGoBack()) {
         router.back()
@@ -1444,10 +1445,11 @@ export default function ReviewScreen() {
                   text: 'Exit',
                   style: 'destructive',
                   onPress: () => {
-                    // Set flag that reviews were exited for home screen to detect changes
-                    if (typeof window !== 'undefined') {
-                      (window as any).reviewsJustCompleted = true
-                    }
+                    // Emit review completion event for home screen to update notebook status
+                    emitEvent('reviewsCompleted', { 
+                      notebookId: id!, 
+                      reviewCount: currentIndex // Reviews completed before exit
+                    })
                     
                     if (router.canGoBack()) {
                       router.back()

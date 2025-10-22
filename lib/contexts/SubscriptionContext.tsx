@@ -150,6 +150,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   const [showPaywall, setShowPaywall] = useState(false)
   const isUpdatingLocalState = useRef(false)
   const lastStateUpdateTime = useRef<number>(0)
+  const lastPaywallNavigationTime = useRef<number>(0)
 
 
   // Load subscription state from profile
@@ -362,9 +363,19 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     }
 
     try {
+      // Set local state lock to prevent overwrites during subscription activation
+      isUpdatingLocalState.current = true
+      lastStateUpdateTime.current = Date.now()
+      console.log('🔒 State lock activated for subscription activation')
+      
       const plan = SUBSCRIPTION_PLANS.find(p => p.id === planId)
       if (!plan) {
         console.error('Invalid plan ID:', planId)
+        // Release state lock on error
+        setTimeout(() => {
+          isUpdatingLocalState.current = false
+          console.log('🔓 State lock released after error')
+        }, 1000)
         return false
       }
 
@@ -401,10 +412,15 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
         console.log(`✅ Subscription activated: ${planId} until ${expiresAt.toISOString()}`)
         
-        // Refresh subscription state from database to ensure UI updates
+        // Immediate state update - no delay to prevent race conditions
+        // The local state is already updated above, just refresh profile data
+        loadSubscriptionFromProfile()
+        
+        // Release state lock after successful activation
         setTimeout(() => {
-          loadSubscriptionFromProfile()
-        }, 500)
+          isUpdatingLocalState.current = false
+          console.log('🔓 State lock released after successful subscription activation')
+        }, 2000) // Shorter delay than trial to reduce race conditions
         
         return true
       }
@@ -412,6 +428,11 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       return false
     } catch (error) {
       console.error('Error activating subscription:', error)
+      // Release state lock on error
+      setTimeout(() => {
+        isUpdatingLocalState.current = false
+        console.log('🔓 State lock released after subscription activation error')
+      }, 1000)
       return false
     }
   }, [user?.id, getCurrentDate, loadSubscriptionFromProfile])
@@ -605,9 +626,41 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     return postTrialMessages[context] || postTrialMessages['general']
   }, [subscription.isInTrial, subscription.trialDaysRemaining])
 
-  // Show paywall modal using router navigation
+  // Show paywall modal using router navigation with mount safety and debouncing
   const showPaywallModal = useCallback(() => {
-    router.push('/paywall')
+    const now = Date.now()
+    const timeSinceLastNavigation = now - lastPaywallNavigationTime.current
+    
+    // Debounce: prevent multiple paywall navigations within 2 seconds
+    if (timeSinceLastNavigation < 2000) {
+      console.log(`🚫 Paywall navigation debounced (${timeSinceLastNavigation}ms since last attempt)`)
+      return
+    }
+    
+    // Update last navigation time
+    lastPaywallNavigationTime.current = now
+    console.log(`📱 Navigating to paywall at ${new Date(now).toISOString()}`)
+    
+    // Add a small delay to ensure router is fully mounted
+    setTimeout(() => {
+      try {
+        router.push('/paywall')
+      } catch (error) {
+        console.warn('Navigation failed, router not ready:', error)
+        // Reset navigation time on failure to allow retry
+        lastPaywallNavigationTime.current = 0
+        // Retry after a longer delay
+        setTimeout(() => {
+          try {
+            router.push('/paywall')
+            lastPaywallNavigationTime.current = Date.now()
+          } catch (retryError) {
+            console.error('Navigation failed after retry:', retryError)
+            lastPaywallNavigationTime.current = 0
+          }
+        }, 2000)
+      }
+    }, 100)
   }, [router])
 
   const contextValue: SubscriptionContextType = {

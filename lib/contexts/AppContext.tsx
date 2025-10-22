@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from './AuthContext'
 import { useDevTime } from './DevTimeContext'
@@ -12,6 +12,18 @@ import {
 import { supabaseService } from '../services/supabaseService'
 import { notificationService } from '../services/notificationService'
 
+// Event system for reliable cross-screen communication
+type AppEvent = 'wordsAdded' | 'reviewsCompleted' | 'appOpened' | 'dataChanged'
+
+interface AppEventData {
+  wordsAdded: { notebookId: string; wordCount: number }
+  reviewsCompleted: { notebookId: string; reviewCount: number }
+  appOpened: Record<string, never>
+  dataChanged: Record<string, never>
+}
+
+type EventListener<T extends AppEvent> = (data: AppEventData[T]) => void
+
 interface AppContextType {
   appState: AppState
   settings: GoldListSettings
@@ -23,6 +35,9 @@ interface AppContextType {
   updateNotebookLastUsed: (notebookId: string) => Promise<void>
   scheduleNotifications: () => Promise<void>
   refreshData?: () => Promise<void>
+  // Event system methods
+  emitEvent: <T extends AppEvent>(event: T, data: AppEventData[T]) => void
+  addEventListener: <T extends AppEvent>(event: T, listener: EventListener<T>) => () => void
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -60,6 +75,44 @@ export function AppProvider({ children }: AppProviderProps) {
     isOffline: false,
     lastSyncTime: null,
   })
+
+  // Event system for reliable cross-screen communication
+  const eventListeners = useRef(new Map<AppEvent, Set<EventListener<any>>>())
+
+  const emitEvent = useCallback(<T extends AppEvent>(event: T, data: AppEventData[T]) => {
+    const listeners = eventListeners.current.get(event)
+    if (listeners) {
+      listeners.forEach(listener => {
+        try {
+          listener(data)
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error)
+        }
+      })
+    }
+    // if (__DEV__) console.log(`📡 Event emitted: ${event}`, data)
+  }, [])
+
+  const addEventListener = useCallback(<T extends AppEvent>(
+    event: T, 
+    listener: EventListener<T>
+  ): (() => void) => {
+    if (!eventListeners.current.has(event)) {
+      eventListeners.current.set(event, new Set())
+    }
+    eventListeners.current.get(event)!.add(listener)
+
+    // Return cleanup function
+    return () => {
+      const listeners = eventListeners.current.get(event)
+      if (listeners) {
+        listeners.delete(listener)
+        if (listeners.size === 0) {
+          eventListeners.current.delete(event)
+        }
+      }
+    }
+  }, [])
 
   // Load settings from AsyncStorage
   useEffect(() => {
@@ -298,6 +351,8 @@ export function AppProvider({ children }: AppProviderProps) {
     updateNotebookLastUsed,
     scheduleNotifications,
     refreshData,
+    emitEvent,
+    addEventListener,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

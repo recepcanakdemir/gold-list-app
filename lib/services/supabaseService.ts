@@ -1,6 +1,20 @@
 import { supabase } from '@/lib/supabase/client'
 import { Database, Tables } from '@/lib/types/database'
 import { PostgrestError } from '@supabase/supabase-js'
+import { withCache, createCacheKey, invalidateCache, performanceCache } from './performanceCache'
+import { 
+  transformTodayProgress, 
+  transformWeeklyProgress, 
+  transformDailyProgress, 
+  transformMonthlyProgress,
+  transformTotalStats,
+  logTransformation,
+  type FrontendTodayProgress,
+  type FrontendWeeklyProgressDay,
+  type FrontendDailyProgress,
+  type FrontendMonthlyProgressMonth,
+  type FrontendTotalStats
+} from '../utils/dataTransform'
 
 // =============================================
 // PERFORMANCE & RELIABILITY HELPERS
@@ -511,14 +525,14 @@ class SupabaseService {
       console.log('⚡ Executing 3 operations in parallel: words insert, page update, profile query...')
       
       // Debug: Log the words being inserted to check if bold fields are included
-      console.log('🔍 DATABASE INSERT DEBUG - Words to insert:')
-      wordsToInsert.forEach((word, index) => {
-        console.log(`  Word ${index + 1}: ${word.word}`)
-        console.log(`    sentence_bold: ${word.sentence_bold}`)
-        console.log(`    meaning_bold: ${word.meaning_bold}`)
-        console.log(`    example_sentence: ${word.example_sentence}`)
-        console.log(`    sentence_meaning: ${word.sentence_meaning}`)
-      })
+      // console.log('🔍 DATABASE INSERT DEBUG - Words to insert:')
+      // wordsToInsert.forEach((word, index) => {
+      //   console.log(`  Word ${index + 1}: ${word.word}`)
+      //   console.log(`    sentence_bold: ${word.sentence_bold}`)
+      //   console.log(`    meaning_bold: ${word.meaning_bold}`)
+      //   console.log(`    example_sentence: ${word.example_sentence}`)
+      //   console.log(`    sentence_meaning: ${word.sentence_meaning}`)
+      // })
 
       // Get notebook details to check words_per_day limit
       const { data: notebook, error: notebookError } = await supabase
@@ -569,6 +583,15 @@ class SupabaseService {
       }
 
       console.log(`✅ Successfully added ${words.length} words`)
+      
+      // PERFORMANCE FIX: Clear cache after adding words to ensure fresh data
+      try {
+        const { invalidateCache } = await import('./performanceCache')
+        invalidateCache(user.id, 'wordsAdded')
+        console.log(`🗑️ Cache invalidated after adding ${words.length} words`)
+      } catch (cacheError) {
+        console.warn('Failed to invalidate cache after adding words:', cacheError)
+      }
       
       // Record streak activity (multi-notebook aware, prevents double-counting)
       try {
@@ -689,7 +712,7 @@ class SupabaseService {
 
   // Streak Management Functions
   async updateStreak(userId: string, hasActivity: boolean, currentDate?: Date): Promise<void> {
-    const today = (currentDate || new Date()).toISOString().split('T')[0]
+    const today = (currentDate || getCurrentDate()).toISOString().split('T')[0]
     console.log(`🔥 supabaseService: updateStreak called - hasActivity=${hasActivity}, date=${today}`)
     
     return withRetry(async () => {
@@ -702,7 +725,7 @@ class SupabaseService {
       if (fetchError) throw fetchError
       if (!profile) throw new Error('Profile not found')
 
-      const today = (currentDate || new Date()).toISOString().split('T')[0] // YYYY-MM-DD format
+      const today = (currentDate || getCurrentDate()).toISOString().split('T')[0] // YYYY-MM-DD format
       const lastActivity = profile.last_activity_date
       
       let newStreakCount = profile.streak_count
@@ -715,16 +738,16 @@ class SupabaseService {
         const daysSinceLastActivity = lastActivity ? 
           Math.floor((new Date(today).getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24)) : 999
 
-        console.log(`🔥 supabaseService: User HAS activity - daysSinceLastActivity=${daysSinceLastActivity}`)
+        console.log(`🔥 supabaseService: User HAS activity - daysSinceLastActivity=${daysSinceLastActivity}, lastActivity=${lastActivity}`)
 
-        if (daysSinceLastActivity <= 2) {
-          // Consecutive day or within 2-day grace period (as per user requirement)
+        if (!lastActivity || daysSinceLastActivity > 2) {
+          // First time activity or too many days missed - start new streak at 1
+          newStreakCount = 1
+          console.log(`🔥 supabaseService: First activity or too many days missed, streak set to 1`)
+        } else if (daysSinceLastActivity <= 2) {
+          // Consecutive day or within 2-day grace period - increment existing streak
           newStreakCount += 1
           console.log(`🔥 supabaseService: Within grace period, streak increased to ${newStreakCount}`)
-        } else {
-          // Too many days missed (>2), start new streak
-          newStreakCount = 1
-          console.log(`🔥 supabaseService: Too many days missed, streak reset to 1`)
         }
 
         // Update longest streak if current streak is higher
@@ -789,7 +812,7 @@ class SupabaseService {
       if (error) throw error
       if (!profile) throw new Error('Profile not found')
 
-      const today = new Date().toISOString().split('T')[0]
+      const today = getCurrentDate().toISOString().split('T')[0]
       const lastActivity = profile.last_activity_date
       
       const daysSinceLastActivity = lastActivity ? 
@@ -1650,6 +1673,15 @@ class SupabaseService {
         // Don't throw - profile stats tracking is non-critical
       }
       
+      // PERFORMANCE FIX: Clear cache after batch review to ensure fresh data
+      try {
+        const { invalidateCache } = await import('./performanceCache')
+        invalidateCache(user.id, 'wordsReviewed')
+        console.log(`🗑️ Cache invalidated after reviewing ${reviews.length} words`)
+      } catch (cacheError) {
+        console.warn('Failed to invalidate cache after batch review:', cacheError)
+      }
+      
       console.log(`✅ Batch review completed: ${reviews.length} words processed`)
       return { 
         success: true,
@@ -1672,92 +1704,190 @@ class SupabaseService {
     // Simplified - do nothing for now
   }
 
-  async getWeeklyProgress(): Promise<{ day: string; wordsAdded: number; wordsRemembered: number; completed: boolean }[]> {
+  async getWeeklyProgress(): Promise<FrontendWeeklyProgressDay[]> {
     return withRetry(async () => {
-      // Get last 7 days of daily progress
-      const dailyProgress = await this.getDailyProgress(7)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return transformWeeklyProgress(null)
+
+      // SMART CACHING: Cache weekly progress for 15 minutes
+      const cacheKey = createCacheKey('weeklyProgress', {})
       
-      // Convert to the format expected by dashboard
-      const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-      const result = []
-      
-      // Generate rolling 7-day window ending with TODAY (rightmost)
-      const currentDate = getCurrentDate()
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date(currentDate)
-        date.setDate(date.getDate() - i)
-        const dayName = weekDays[date.getDay()]
-        const dateStr = date.toISOString().split('T')[0]
-        
-        // Find matching daily progress data
-        const dayData = dailyProgress.find(d => d.date === dateStr)
-        const wordsAdded = dayData?.wordsAdded || 0
-        const wordsRemembered = dayData?.wordsRemembered || 0
-        
-        result.push({
-          day: dayName,
-          wordsAdded: wordsAdded,
-          wordsRemembered: wordsRemembered,
-          completed: wordsAdded > 0 // Consider completed if any words were added
+      return withCache(cacheKey, user.id, async () => {
+        // PERFORMANCE OPTIMIZATION: Use database function instead of JavaScript processing
+        const currentDate = getCurrentDate()
+        const currentDateStr = currentDate.toISOString().split('T')[0]
+        console.log(`📊 Using optimized database function for weekly progress (user: ${user.id}, date: ${currentDateStr})`)
+        const { data, error } = await supabase.rpc('get_weekly_progress_optimized', {
+          p_user_id: user.id,
+          p_current_date: currentDateStr
         })
-      }
-      
-      console.log(`📊 Generated rolling 7-day window: ${result.map(r => r.day).join('-')} (TODAY: ${result[result.length - 1].day})`)
-      return result
-      
+
+        if (error) {
+          console.error('Error in get_weekly_progress_optimized:', error)
+          console.log('📊 Falling back to legacy method')
+          // Fallback to original method if function doesn't exist yet
+          return this.getWeeklyProgressLegacy()
+        }
+
+        console.log(`📊 Weekly: Database function returned ${data?.length || 0} days`)
+        // console.log(`📊 Weekly progress raw response:`, data)
+        
+        // Transform database response from snake_case to camelCase
+        const transformedResult = transformWeeklyProgress(data)
+        logTransformation(data, transformedResult, 'getWeeklyProgress')
+        return transformedResult
+      }, 'weeklyProgress')
     }, 'getWeeklyProgress')
   }
 
-  async getMonthlyProgress(): Promise<{ month: string; wordsAdded: number; wordsMastered: number }[]> {
-    return withRetry(async () => {
-      // Get last 7 months of daily progress (approximately 210 days)
-      const dailyProgress = await this.getDailyProgress(210)
+  // Legacy method as fallback
+  private async getWeeklyProgressLegacy(): Promise<FrontendWeeklyProgressDay[]> {
+    // Get last 7 days of daily progress
+    const dailyProgress = await this.getDailyProgress(7)
+    
+    // Convert to the format expected by dashboard
+    const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    const result = []
+    
+    // Generate rolling 7-day window ending with TODAY (rightmost)
+    const currentDate = getCurrentDate()
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(currentDate)
+      date.setDate(date.getDate() - i)
+      const dayName = weekDays[date.getDay()]
+      const dateStr = date.toISOString().split('T')[0]
       
-      // Group data by month
-      const monthlyStats: { [key: string]: { wordsAdded: number; wordsMastered: number } } = {}
+      // Find matching daily progress data
+      const dayData = dailyProgress.find(d => d.date === dateStr)
+      const wordsAdded = dayData?.wordsAdded || 0
+      const wordsRemembered = dayData?.wordsRemembered || 0
       
-      dailyProgress.forEach(day => {
-        const date = new Date(day.date)
-        const monthKey = date.toISOString().substring(0, 7) // YYYY-MM format
-        
-        if (!monthlyStats[monthKey]) {
-          monthlyStats[monthKey] = { wordsAdded: 0, wordsMastered: 0 }
-        }
-        
-        monthlyStats[monthKey].wordsAdded += day.wordsAdded
-        monthlyStats[monthKey].wordsMastered += day.wordsRemembered
+      result.push({
+        day: dayName,
+        wordsAdded: wordsAdded,
+        wordsRemembered: wordsRemembered,
+        completed: wordsAdded > 0 // Consider completed if any words were added
       })
+    }
+    
+    console.log(`📊 Generated rolling 7-day window: ${result.map(r => r.day).join('-')} (TODAY: ${result[result.length - 1].day})`)
+    return result
+  }
+
+  async getMonthlyProgress(): Promise<FrontendMonthlyProgressMonth[]> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return transformMonthlyProgress(null)
       
-      // Convert to array and get last 7 months
-      const currentDate = getCurrentDate()
-      const result = []
+      // SMART CACHING: Cache monthly progress for 1 hour (rarely changes)
+      const cacheKey = createCacheKey('monthlyProgress', {})
       
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date(currentDate)
-        date.setMonth(date.getMonth() - i)
-        const monthKey = date.toISOString().substring(0, 7)
-        const monthName = date.toLocaleDateString('en-US', { month: 'short' })
-        
-        const monthData = monthlyStats[monthKey] || { wordsAdded: 0, wordsMastered: 0 }
-        
-        result.push({
-          month: monthName,
-          wordsAdded: monthData.wordsAdded,
-          wordsMastered: monthData.wordsMastered
+      return withCache(cacheKey, user.id, async () => {
+        // PERFORMANCE OPTIMIZATION: Use database function instead of 210-day JavaScript processing
+        const currentDate = getCurrentDate()
+        const currentDateStr = currentDate.toISOString().split('T')[0]
+        console.log(`📊 Using optimized database function for monthly progress (user: ${user.id}, date: ${currentDateStr})`)
+        const { data, error } = await supabase.rpc('get_monthly_progress_optimized', {
+          p_user_id: user.id,
+          p_current_date: currentDateStr
         })
-      }
-      
-      console.log(`📊 Generated monthly progress for 7 months`)
-      return result
-      
+
+        if (error) {
+          console.error('Error in get_monthly_progress_optimized:', error)
+          console.log('📊 Falling back to legacy method')
+          return this.getMonthlyProgressLegacy()
+        }
+
+        console.log(`📊 Monthly: Database function returned ${data?.length || 0} months`)
+        
+        // Transform database response from snake_case to camelCase
+        const transformedResult = transformMonthlyProgress(data)
+        logTransformation(data, transformedResult, 'getMonthlyProgress')
+        return transformedResult
+      }, 'monthlyProgress')
     }, 'getMonthlyProgress')
   }
 
+  // Legacy method as fallback (SLOW - processes 210 days in JavaScript)
+  private async getMonthlyProgressLegacy(): Promise<FrontendMonthlyProgressMonth[]> {
+    // Get last 7 months of daily progress (approximately 210 days)
+    const dailyProgress = await this.getDailyProgress(210)
+    
+    // Group data by month
+    const monthlyStats: { [key: string]: { wordsAdded: number; wordsMastered: number } } = {}
+    
+    dailyProgress.forEach(day => {
+      const date = new Date(day.date)
+      const monthKey = date.toISOString().substring(0, 7) // YYYY-MM format
+      
+      if (!monthlyStats[monthKey]) {
+        monthlyStats[monthKey] = { wordsAdded: 0, wordsMastered: 0 }
+      }
+      
+      monthlyStats[monthKey].wordsAdded += day.wordsAdded
+      monthlyStats[monthKey].wordsMastered += day.wordsRemembered
+    })
+    
+    // Convert to array and get last 7 months
+    const currentDate = getCurrentDate()
+    const result = []
+    
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(currentDate)
+      date.setMonth(date.getMonth() - i)
+      const monthKey = date.toISOString().substring(0, 7)
+      const monthName = date.toLocaleDateString('en-US', { month: 'short' })
+      
+      const monthData = monthlyStats[monthKey] || { wordsAdded: 0, wordsMastered: 0 }
+      
+      result.push({
+        month: monthName,
+        wordsAdded: monthData.wordsAdded,
+        wordsMastered: monthData.wordsMastered
+      })
+    }
+    
+    console.log(`📊 Generated monthly progress for 7 months`)
+    return result
+  }
+
   // Get real-time total words statistics from database
-  async getTotalWordsStats(): Promise<{ totalAdded: number; totalMastered: number }> {
+  async getTotalWordsStats(): Promise<FrontendTotalStats> {
     return withRetry(async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return { totalAdded: 0, totalMastered: 0 }
+      if (!user) return transformTotalStats(null)
+
+      // SMART CACHING: Cache total stats for 20 minutes
+      const cacheKey = createCacheKey('totalStats', {})
+      
+      return withCache(cacheKey, user.id, async () => {
+        // PERFORMANCE OPTIMIZATION: Use database function instead of multiple queries
+        console.log(`📊 Using optimized database function for total stats (user: ${user.id})`)
+        const { data, error } = await supabase.rpc('get_total_words_stats_optimized', {
+          p_user_id: user.id
+        })
+
+        if (error) {
+          console.error('Error in get_total_words_stats_optimized:', error)
+          console.log('📊 Falling back to legacy method')
+          return this.getTotalWordsStatsLegacy()
+        }
+
+        const rawResult = data?.[0] || { total_added: 0, total_mastered: 0 }
+        console.log(`📊 Total stats: ${rawResult.total_added} total, ${rawResult.total_mastered} mastered`)
+        // console.log(`📊 Raw database response:`, data)
+        
+        const transformedResult = transformTotalStats(rawResult)
+        logTransformation(rawResult, transformedResult, 'getTotalWordsStats')
+        return transformedResult
+      }, 'totalStats')
+    }, 'getTotalWordsStats')
+  }
+
+  // Legacy method as fallback (SLOW - multiple parallel queries)
+  private async getTotalWordsStatsLegacy(): Promise<FrontendTotalStats> {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return transformTotalStats(null)
 
       // Get user's notebook IDs
       const { data: notebooks } = await supabase
@@ -1766,7 +1896,7 @@ class SupabaseService {
         .eq('user_id', user.id)
 
       if (!notebooks || notebooks.length === 0) {
-        return { totalAdded: 0, totalMastered: 0 }
+        return transformTotalStats(null)
       }
 
       const notebookIds = notebooks.map(n => n.id)
@@ -1787,9 +1917,12 @@ class SupabaseService {
       const totalAdded = totalWordsResult.count || 0
       const totalMastered = masteredWordsResult.count || 0
 
-      console.log(`📊 Real-time stats: ${totalAdded} total words, ${totalMastered} mastered`)
-      return { totalAdded, totalMastered }
-    }, 'getTotalWordsStats')
+      const rawResult = { total_added: totalAdded, total_mastered: totalMastered }
+      const transformedResult = transformTotalStats(rawResult)
+      
+      console.log(`📊 Real-time stats (LEGACY): ${totalAdded} total words, ${totalMastered} mastered`)
+      logTransformation(rawResult, transformedResult, 'getTotalWordsStats Legacy')
+      return transformedResult
   }
 
   async updateProfileStats(deltaAdded: number = 0, deltaMastered: number = 0): Promise<void> {
@@ -1851,13 +1984,55 @@ class SupabaseService {
     }, 'syncProfileStats')
   }
 
-  async getTodayProgress(): Promise<{ wordsAdded: number; goal: number; completed: boolean }> {
+  async getTodayProgress(): Promise<FrontendTodayProgress> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return transformTodayProgress(null)
+
+      // PERFORMANCE OPTIMIZATION: Use optimized database function with DevTime support
+      // Temporarily disable database function for DevTime debugging
+      if (false) {
+        const currentDate = getCurrentDate()
+        const currentDateStr = currentDate.toISOString().split('T')[0]
+        console.log(`📊 Using optimized database function for today progress (user: ${user.id}, date: ${currentDateStr})`)
+        
+        const { data, error } = await supabase.rpc('get_daily_stats_optimized', {
+          p_user_id: user.id,
+          p_days: 1,
+          p_current_date: currentDateStr
+        })
+
+        if (error) {
+          console.error('Error in get_daily_stats_optimized:', error)
+          console.log('📊 Falling back to legacy method')
+          // Fallback to legacy method
+          return this.getTodayProgressLegacy()
+        }
+
+        // Database function returns: { words_added, goal, completed }
+        const rawResult = data?.[0] || { words_added: 0, goal: 20, completed: false }
+        const transformedResult = transformTodayProgress(rawResult)
+        
+        logTransformation(rawResult, transformedResult, 'getTodayProgress')
+        return transformedResult
+      }
+
+      // Use legacy method for DevTime compatibility
+      return this.getTodayProgressLegacy()
+    }, 'getTodayProgress')
+  }
+
+  // Legacy method as fallback
+  private async getTodayProgressLegacy(): Promise<FrontendTodayProgress> {
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return { wordsAdded: 0, goal: 20, completed: false }
+      if (!user) return transformTodayProgress(null)
 
       const currentDate = getCurrentDate()
       const todayDateStr = currentDate.toISOString().split('T')[0]
+      
+      // console.log(`📅 getTodayProgress LEGACY - DevTime date: ${currentDate.toISOString()}`)
+      // console.log(`📅 getTodayProgress LEGACY - Querying for date_created: ${todayDateStr}`)
 
       // Get today's page and check if it has words
       const { data: pages, error } = await supabase
@@ -1866,6 +2041,7 @@ class SupabaseService {
           id,
           words_count,
           is_completed,
+          date_created,
           notebook:notebooks!notebook_id(user_id, words_per_day)
         `)
         .eq('notebooks.user_id', user.id)
@@ -1874,30 +2050,70 @@ class SupabaseService {
 
       if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
         console.error('Error getting today progress:', error)
-        return { wordsAdded: 0, goal: 20, completed: false }
+        return transformTodayProgress(null)
       }
 
       if (!pages) {
-        // No page created for today yet
-        return { wordsAdded: 0, goal: 20, completed: false }
+        console.log(`📅 getTodayProgress LEGACY - No pages found for date ${todayDateStr}`)
+        return transformTodayProgress(null)
       }
 
-      const wordsAdded = pages.words_count || 0
-      const goal = (pages.notebook as any).words_per_day || 20
-      const completed = pages.is_completed || wordsAdded >= goal
-
-      return {
-        wordsAdded,
-        goal,
-        completed
+      const rawResult = {
+        words_added: pages.words_count || 0,
+        goal: (pages.notebook as any).words_per_day || 20,
+        completed: pages.is_completed || ((pages.words_count || 0) >= ((pages.notebook as any).words_per_day || 20))
       }
+
+      const transformedResult = transformTodayProgress(rawResult)
+      logTransformation(rawResult, transformedResult, 'getTodayProgress Legacy')
+      return transformedResult
     } catch (error) {
-      console.error('Error in getTodayProgress:', error)
-      return { wordsAdded: 0, goal: 20, completed: false }
+      console.error('Error in getTodayProgress legacy:', error)
+      return transformTodayProgress(null)
     }
   }
 
-  async getDailyProgress(days: number): Promise<DailyProgress[]> {
+  async getDailyProgress(days: number): Promise<FrontendDailyProgress[]> {
+    return withRetry(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return []
+
+      // PERFORMANCE OPTIMIZATION: Use database function for large date ranges
+      // Temporarily disable database function for heatmap debugging
+      if (false && days >= 30) {
+        // SMART CACHING: Cache daily progress based on days requested (heatmap data)
+        const cacheKey = createCacheKey('dailyProgress', { days })
+        
+        return withCache(cacheKey, user.id, async () => {
+          const currentDate = getCurrentDate()
+          const currentDateStr = currentDate.toISOString().split('T')[0]
+          console.log(`📊 Using optimized database function for ${days} days (date: ${currentDateStr})`)
+          const { data, error } = await supabase.rpc('get_daily_stats_optimized', {
+            p_user_id: user.id,
+            p_days: days,
+            p_current_date: currentDateStr
+          })
+
+          if (error) {
+            console.error('Error in get_daily_stats_optimized:', error)
+            console.log('📊 Falling back to legacy method')
+            return this.getDailyProgressLegacy(days)
+          }
+
+          // Transform database result from snake_case to camelCase
+          const transformedResult = transformDailyProgress(data)
+          logTransformation(data, transformedResult, `getDailyProgress (${days} days)`)
+          return transformedResult
+        }, 'dailyProgress')
+      }
+
+      // Use legacy method for small date ranges (< 30 days) - no caching needed
+      return this.getDailyProgressLegacy(days)
+    }, 'getDailyProgress')
+  }
+
+  // Legacy method as fallback (SLOW - processes days in JavaScript)
+  private async getDailyProgressLegacy(days: number): Promise<FrontendDailyProgress[]> {
     return withRetry(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return []
@@ -1907,7 +2123,7 @@ class SupabaseService {
       // Generate date range for the requested number of days
       const dailyStats: { [key: string]: DailyProgress } = {}
 
-      console.log(`📊 Getting daily progress for ${days} days using page-level data`)
+      console.log(`📊 Getting daily progress for ${days} days using page-level data (LEGACY METHOD)`)
 
       // Initialize all days with zero values
       for (let i = 0; i < days; i++) {
@@ -2033,11 +2249,10 @@ class SupabaseService {
         new Date(b.date).getTime() - new Date(a.date).getTime()
       )
 
-      console.log(`📊 Generated daily progress for ${result.length} days using page-level data`)
-      console.log(`📊 Sample daily stats:`, result.slice(0, 3))
+      console.log(`📊 Generated daily progress for ${result.length} days using page-level data (LEGACY)`)
+      // console.log(`📊 Sample daily stats:`, result.slice(0, 3))
       return result
-
-    }, 'getDailyProgress')
+    }, 'getDailyProgressLegacy')
   }
 
   async getTotalWordsCount(): Promise<number> {

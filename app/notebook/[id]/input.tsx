@@ -192,10 +192,10 @@ export default function WordInputScreen() {
         difficultyLevel: 'intermediate' as const
       }
 
-      console.log(`🤖 Generating unlimited sentence for "${word}" → "${meaning}"`)
+      // console.log(`🤖 Generating unlimited sentence for "${word}" → "${meaning}"`)
       const result = await geminiService.generateSentences(request)
       
-      console.log(`🔍 CLIENT DEBUG - AI Generation Result:`, JSON.stringify(result, null, 2))
+      // console.log(`🔍 CLIENT DEBUG - AI Generation Result:`, JSON.stringify(result, null, 2))
       
       // Update the specific word in the list with both sentence and meaning
       setWords(prevWords => {
@@ -209,12 +209,12 @@ export default function WordInputScreen() {
             meaning_bold: result.meaningBold,
             ai_generated: true
           }
-          console.log(`🔍 CLIENT DEBUG - Updated word data:`, JSON.stringify(newWords[wordIndex], null, 2))
+          // console.log(`🔍 CLIENT DEBUG - Updated word data:`, JSON.stringify(newWords[wordIndex], null, 2))
         }
         return newWords
       })
 
-      console.log(`✅ Generated sentence: "${result.sentence}" with meaning: "${result.sentenceMeaning}"`)
+      // console.log(`✅ Generated sentence: "${result.sentence}" with meaning: "${result.sentenceMeaning}"`)
       return result.sentence
     } catch (error) {
       console.error('AI generation error:', error)
@@ -256,7 +256,7 @@ export default function WordInputScreen() {
         targetLanguage: 'English' // Could be made configurable later
       }
 
-      console.log(`🌐 Translating word "${word}" from ${request.sourceLanguage} to ${request.targetLanguage}`)
+      // console.log(`🌐 Translating word "${word}" from ${request.sourceLanguage} to ${request.targetLanguage}`)
       const translation = await translationService.translateWord(request)
       
       // Update the specific word's meaning with the translation
@@ -271,7 +271,7 @@ export default function WordInputScreen() {
         return newWords
       })
 
-      console.log(`✅ Translated "${word}" → "${translation}"`)
+      // console.log(`✅ Translated "${word}" → "${translation}"`)
       return translation
 
     } catch (error) {
@@ -350,16 +350,25 @@ export default function WordInputScreen() {
     const userState = getUserState()
     
     if (userState === 'post-trial') {
-      console.log('🚫 Input Screen: Post-trial user detected, redirecting to paywall')
-      showPaywallModal()
-      
-      // Safe navigation: check if we can go back, otherwise go to dashboard
-      if (router.canGoBack()) {
-        router.back()
-      } else {
-        console.log('🚫 Input Screen: No previous screen, navigating to dashboard')
-        router.replace('/(tabs)/dashboard')
-      }
+      // Add a small delay to avoid race conditions during subscription state updates
+      setTimeout(() => {
+        // Double-check user state after delay to avoid false positives
+        const currentUserState = getUserState()
+        if (currentUserState === 'post-trial') {
+          console.log('🚫 Input Screen: Post-trial user confirmed, redirecting to paywall')
+          showPaywallModal()
+          
+          // Safe navigation: check if we can go back, otherwise go to dashboard
+          if (router.canGoBack()) {
+            router.back()
+          } else {
+            console.log('🚫 Input Screen: No previous screen, navigating to dashboard')
+            router.replace('/(tabs)/dashboard')
+          }
+        } else {
+          console.log('🚫 Input Screen: User state changed during check, skipping paywall')
+        }
+      }, 500)
     }
   }, [getUserState, showPaywallModal, router])
 

@@ -6,9 +6,12 @@ import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { supabaseService } from '@/lib/services/supabaseService'
-import { DailyProgress } from '@/lib/types/goldlist'
+import { supabase } from '@/lib/supabase/client'
+import { FrontendDailyProgress } from '@/lib/utils/dataTransform'
 import { useRouter, useFocusEffect } from 'expo-router'
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useQueryClient } from '@/lib/contexts/QueryProvider'
 import {
   Dimensions,
   RefreshControl,
@@ -112,124 +115,129 @@ function CircularProgress({ percentage, color, size, strokeWidth, title, subtitl
 
 export default function DashboardScreen() {
   const router = useRouter()
-  const { profile } = useAuth()
-  const { appState, refreshNotebooks } = useApp()
+  const { profile, refreshProfile } = useAuth()
+  const { appState, refreshNotebooks, addEventListener, emitEvent } = useApp()
   const { colors } = useTheme()
   const { subscription, showPaywallModal, hasFeature, getUserState } = useSubscription()
   const { currentSimulatedDay, getCurrentDate } = useDevTime()
+  const queryClient = useQueryClient()
   const [refreshing, setRefreshing] = useState(false)
   const [selectedChartPeriod, setSelectedChartPeriod] = useState<'week' | 'month'>('week')
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month'>('week')
   const [currentPage, setCurrentPage] = useState(0)
-  const [weeklyData, setWeeklyData] = useState([
-    { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Wed', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Thu', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Fri', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
-  ])
-  const [monthlyData, setMonthlyData] = useState<{ month: string; wordsAdded: number; wordsMastered: number }[]>([
-    { month: 'Apr', wordsAdded: 0, wordsMastered: 0 },
-    { month: 'May', wordsAdded: 0, wordsMastered: 0 },
-    { month: 'Jun', wordsAdded: 0, wordsMastered: 0 },
-    { month: 'Jul', wordsAdded: 0, wordsMastered: 0 },
-    { month: 'Aug', wordsAdded: 0, wordsMastered: 0 },
-    { month: 'Sep', wordsAdded: 0, wordsMastered: 0 },
-    { month: 'Oct', wordsAdded: 0, wordsMastered: 0 },
-  ])
-  const [activityData, setActivityData] = useState<number[][]>([])
-  const [todayProgress, setTodayProgress] = useState({
-    wordsAdded: 0,
-    goal: 20,
-    completed: false
-  })
-  const [totalWordsStats, setTotalWordsStats] = useState({
-    totalAdded: 0,
-    totalMastered: 0
-  })
-  const insets = useSafeAreaInsets()
+  // Note: Old manual state management removed - now using React Query + computed values
+
+  // ===== REACT QUERY DATA FETCHING =====
+  // These will replace the manual state management above
   
-  // App state tracking for open app detection
-  const appStateRef = useRef(AppState.currentState)
+  // Today's progress with DevTime synchronization
+  const { 
+    data: todayProgressData, 
+    isLoading: todayLoading,
+    error: todayError,
+    refetch: refetchTodayProgress
+  } = useQuery({
+    queryKey: ['today-progress', profile?.id, getCurrentDate().toISOString().split('T')[0]],
+    queryFn: () => supabaseService.getTodayProgress(),
+    enabled: !!profile?.id,
+    staleTime: 30 * 1000, // 30 seconds for immediate feel
+    refetchInterval: 15 * 1000, // Refresh every 15 seconds
+  })
 
-  useEffect(() => {
-    refreshNotebooks()
-  }, [])
+  // Weekly progress with DevTime synchronization
+  const { 
+    data: weeklyProgressData, 
+    isLoading: weeklyLoading,
+    refetch: refetchWeeklyProgress
+  } = useQuery({
+    queryKey: ['weekly-progress', profile?.id, getCurrentDate().toISOString().split('T')[0]],
+    queryFn: () => supabaseService.getWeeklyProgress(),
+    enabled: !!profile?.id,
+    staleTime: 60 * 1000, // 1 minute for weekly data
+  })
 
-  // AppState listener for app open detection
-  useEffect(() => {
-    const handleAppStateChange = (nextAppState: AppStateStatus) => {
-      // Only refresh when app comes from background to foreground
-      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-        if (__DEV__) console.log('📱 Dashboard - App opened from background, setting refresh flag')
-        if (typeof window !== 'undefined') {
-          (window as any).appJustOpened = true
-        }
-      }
-      appStateRef.current = nextAppState
-    }
+  // Monthly progress
+  const { 
+    data: monthlyProgressData, 
+    isLoading: monthlyLoading,
+    refetch: refetchMonthlyProgress
+  } = useQuery({
+    queryKey: ['monthly-progress', profile?.id, currentSimulatedDay],
+    queryFn: () => supabaseService.getMonthlyProgress(),
+    enabled: !!profile?.id,
+    staleTime: 30 * 1000, // 30 seconds for real-time updates
+    refetchInterval: 30 * 1000, // Refresh every 30 seconds for monthly data
+  })
 
-    const subscription = AppState.addEventListener('change', handleAppStateChange)
-    return () => subscription?.remove()
-  }, [])
+  // Daily progress for heatmap (175 days like before)
+  const { 
+    data: dailyProgressData, 
+    isLoading: heatmapLoading,
+    refetch: refetchDailyProgress
+  } = useQuery({
+    queryKey: ['daily-progress', profile?.id, currentSimulatedDay, 175],
+    queryFn: () => supabaseService.getDailyProgress(175),
+    enabled: !!profile?.id,
+    staleTime: 30 * 1000, // 30 seconds for real-time updates
+    refetchInterval: 15 * 1000, // Refresh every 15 seconds for real-time feel
+  })
 
-  // Load dashboard data only on initial profile load or simulation day changes
-  useEffect(() => {
-    if (profile) {
-      loadDashboardData()
-    }
-  }, [profile, currentSimulatedDay]) // Reload when simulation day changes
+  // Total words statistics
+  const { 
+    data: totalStatsData, 
+    isLoading: totalStatsLoading,
+    refetch: refetchTotalStats
+  } = useQuery({
+    queryKey: ['total-stats', profile?.id],
+    queryFn: () => supabaseService.getTotalWordsStats(),
+    enabled: !!profile?.id,
+    staleTime: 30 * 1000, // 30 seconds for stats
+    refetchInterval: 30 * 1000, // Refresh every 30 seconds for real-time feel
+  })
 
-  const loadDashboardData = async () => {
-    // Only load dashboard data if user is authenticated
-    if (!profile) {
-      return
-    }
-    
-    try {
-      console.log(`🔍 Dashboard Debug: Loading data with simulation day ${currentSimulatedDay}`)
-      
-      const [weekly, today, dailyProgress, monthly, totalStats] = await Promise.all([
-        supabaseService.getWeeklyProgress(),
-        supabaseService.getTodayProgress(),
-        supabaseService.getDailyProgress(25 * 7), // Get last ~6 months for heatmap
-        supabaseService.getMonthlyProgress(), // Get last 7 months for chart
-        supabaseService.getTotalWordsStats() // Get real-time total words stats
-      ])
-      
-      console.log(`🔍 Dashboard Debug: Weekly data received:`, weekly)
-      console.log(`🔍 Dashboard Debug: Today progress:`, today)
-      console.log(`🔍 Dashboard Debug: Total words stats:`, totalStats)
-      
-      setWeeklyData(weekly)
-      setTodayProgress(today)
-      setMonthlyData(monthly)
-      setTotalWordsStats(totalStats)
-      
-      // Generate activity heatmap from daily progress data
-      const heatmapData = generateRealHeatmap(dailyProgress)
-      setActivityData(heatmapData)
-      
-      // One-time sync of profile stats to fix any inconsistencies
-      try {
-        if (profile?.total_words_added === 0 && profile?.total_words_mastered === 0 && totalStats.totalAdded > 0) {
-          console.log('🔄 Syncing profile stats to fix cached values...')
-          await supabaseService.syncProfileStats()
-        }
-      } catch (syncError) {
-        console.warn('Profile sync failed (non-critical):', syncError)
-      }
-    } catch (error) {
-      console.error('Error loading dashboard data:', error)
-      // Keep default empty data if there's an error
-    }
-  }
+  // ===== COMPUTED VALUES =====
+  // Transform React Query data into UI-ready format
+  
+  // Use React Query data with fallbacks to prevent NaN issues
+  const computedTodayProgress = useMemo(() => {
+    return todayProgressData || { wordsAdded: 0, goal: 20, completed: false }
+  }, [todayProgressData])
 
-  const generateRealHeatmap = (dailyProgress: DailyProgress[]) => {
+  const computedWeeklyData = useMemo(() => {
+    return weeklyProgressData || [
+      { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Wed', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Thu', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Fri', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    ]
+  }, [weeklyProgressData])
+
+  const computedMonthlyData = useMemo(() => {
+    return monthlyProgressData || [
+      { month: 'Apr', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'May', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Jun', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Jul', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Aug', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Sep', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Oct', wordsAdded: 0, wordsMastered: 0 },
+    ]
+  }, [monthlyProgressData])
+
+  const computedTotalStats = useMemo(() => {
+    return totalStatsData || { totalAdded: 0, totalMastered: 0 }
+  }, [totalStatsData])
+
+  // Heatmap generation function
+  const generateRealHeatmap = useCallback((dailyProgress: FrontendDailyProgress[]) => {
     const rows = 7 // Days of week (Sunday = 0, Monday = 1, ..., Saturday = 6)
     const cols = 25 // Weeks to show (~6 months)
+    
+    console.log(`🗓️ HEATMAP DEBUG: Generating heatmap with ${dailyProgress?.length || 0} days of data`);
+    console.log(`🗓️ Daily progress data:`, dailyProgress);
     
     // Initialize with empty data (7 rows × 25 columns)
     const heatmapData = Array.from({ length: rows }, () => Array(cols).fill(0))
@@ -249,9 +257,14 @@ export default function DashboardScreen() {
       const weeksFromEpoch = Math.floor((currentWeekStart.getTime() - epochStart.getTime()) / (7 * 24 * 60 * 60 * 1000))
       
       // Process each day's progress
-      dailyProgress.forEach((day) => {
+      dailyProgress.forEach((day, index) => {
         // Parse the date from the daily progress
         const dayDate = new Date(day.date + 'T00:00:00.000Z') // Ensure UTC parsing
+        
+        // Only log days with activity to reduce noise
+        if (day.wordsAdded > 0 || day.wordsReviewed > 0) {
+          console.log(`🗓️ Processing day ${index}: ${day.date} with ${day.wordsAdded} words, ${day.wordsReviewed} reviews`);
+        }
         
         // Calculate which week this day belongs to
         const dayWeekStart = new Date(dayDate)
@@ -266,71 +279,280 @@ export default function DashboardScreen() {
         const weeksFromCurrentWeek = weeksFromEpoch - dayWeeksFromEpoch
         const col = cols - 1 - weeksFromCurrentWeek // Rightmost = current week
         
+        // Only log positioning for days with activity
+        // if (day.wordsAdded > 0) {
+        //   console.log(`🗓️   Date: ${dayDate.toISOString()}, Day of week: ${dayDate.getUTCDay()}, Col: ${col}`);
+        // }
+        
         // Only show days within our 25-week window
         if (col >= 0 && col < cols) {
           const dayOfWeek = dayDate.getUTCDay() // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
           const row = dayOfWeek
           
           if (row >= 0 && row < rows) {
-            // Binary: 1 if any words added, 0 if no activity
-            const isActive = day.wordsAdded > 0 ? 1 : 0
+            // Binary: 1 if any words added OR reviewed, 0 if no activity
+            const isActive = (day.wordsAdded > 0 || day.wordsReviewed > 0) ? 1 : 0
             heatmapData[row][col] = isActive
+            // Only log heatmap updates for active days
+            if (isActive) {
+              console.log(`🗓️   Setting heatmap[${row}][${col}] = ${isActive} (${day.wordsAdded} words, ${day.wordsReviewed} reviews)`);
+            }
+          }
+        } else {
+          // Only log if outside window and has activity
+          if (day.wordsAdded > 0 || day.wordsReviewed > 0) {
+            console.log(`🗓️   Day outside 25-week window, col: ${col}`);
           }
         }
       })
+    } else {
+      console.log(`🗓️ No daily progress data available for heatmap`);
     }
     
-    console.log('🗓️ Generated GitHub-style shifting heatmap with weekly progression')
+    console.log('🗓️ Generated GitHub-style shifting heatmap with weekly progression');
+    console.log('🗓️ Final heatmap data:', heatmapData);
     return heatmapData
-  }
+  }, [getCurrentDate])
+
+  // Generate heatmap data from daily progress  
+  const computedActivityData = useMemo(() => {
+    if (!dailyProgressData) return []
+    return generateRealHeatmap(dailyProgressData)
+  }, [dailyProgressData, generateRealHeatmap])
+
+  // Combined loading state for pull-to-refresh
+  const isAnyLoading = todayLoading || weeklyLoading || monthlyLoading || heatmapLoading || totalStatsLoading
+
+  // Debug logging for React Query data
+  // if (__DEV__) {
+  //   console.log('🔍 React Query Debug - Today Progress:', todayProgressData)
+  //   console.log('🔍 React Query Debug - Weekly Data:', weeklyProgressData)
+  //   console.log('🔍 React Query Debug - Total Stats:', totalStatsData)
+  //   console.log('🔍 React Query Debug - Loading states:', {
+  //     today: todayLoading,
+  //     weekly: weeklyLoading,
+  //     monthly: monthlyLoading,
+  //     heatmap: heatmapLoading,
+  //     totalStats: totalStatsLoading
+  //   })
+  // }
+
+  const insets = useSafeAreaInsets()
+  
+  // App state tracking for open app detection
+  const appStateRef = useRef(AppState.currentState)
+
+  useEffect(() => {
+    refreshNotebooks()
+  }, [])
+
+  // AppState listener for app open detection
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      // Only refresh when app comes from background to foreground
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        if (__DEV__) console.log('📱 Dashboard - App opened from background, emitting app opened event')
+        emitEvent('appOpened', {})
+      }
+      appStateRef.current = nextAppState
+    }
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange)
+    return () => subscription?.remove()
+  }, [])
+
+  // Handle profile stats sync when total stats are available
+  useEffect(() => {
+    if (profile && totalStatsData && !totalStatsLoading) {
+      // One-time sync of profile stats to fix any inconsistencies
+      if (profile.total_words_added === 0 && profile.total_words_mastered === 0 && totalStatsData.totalAdded > 0) {
+        console.log('🔄 Syncing profile stats to fix cached values...')
+        supabaseService.syncProfileStats().catch(error => {
+          console.warn('Profile sync failed (non-critical):', error)
+        })
+      }
+    }
+  }, [profile, totalStatsData, totalStatsLoading])
+
+  // Note: generateRealHeatmap function moved above to fix scope issue
 
   const onRefresh = async () => {
     setRefreshing(true)
-    await Promise.all([
-      refreshNotebooks(),
-      loadDashboardData()
-    ])
-    setRefreshing(false)
+    try {
+      // Use React Query refetch for all dashboard data + refresh notebooks
+      await Promise.all([
+        refreshNotebooks(),
+        refetchTodayProgress(),
+        refetchWeeklyProgress(), 
+        refetchMonthlyProgress(),
+        refetchDailyProgress(),
+        refetchTotalStats()
+      ])
+      console.log('✅ Dashboard: Pull-to-refresh completed successfully')
+    } catch (error) {
+      console.error('❌ Dashboard: Pull-to-refresh error:', error)
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   // Smart focus-based updates: Only refresh when data actually changes
   const [hasInitialLoad, setHasInitialLoad] = useState(false)
   
-  useFocusEffect(
-    useCallback(() => {
-      // Check for data change flags first
-      if (typeof window !== 'undefined') {
-        const wordsJustAdded = (window as any).wordsJustAdded
-        const reviewsJustCompleted = (window as any).reviewsJustCompleted
-        const appJustOpened = (window as any).appJustOpened
-        
-        if (wordsJustAdded || reviewsJustCompleted || appJustOpened) {
-          if (__DEV__) console.log('📊 Dashboard refresh triggered by data change')
-          
-          // Clear flags safely
-          try {
-            if ((window as any).wordsJustAdded !== undefined) {
-              delete (window as any).wordsJustAdded
-            }
-            if ((window as any).reviewsJustCompleted !== undefined) {
-              delete (window as any).reviewsJustCompleted
-            }
-            if ((window as any).appJustOpened !== undefined) {
-              delete (window as any).appJustOpened
-            }
-          } catch (e) {
-            // Fallback if delete fails
-            (window as any).wordsJustAdded = undefined
-            (window as any).reviewsJustCompleted = undefined
-            (window as any).appJustOpened = undefined
-          }
-          
-          // Trigger refresh
-          loadDashboardData()
-          return // Skip normal focus logic
-        }
+  // REACT QUERY: Event-based cache invalidation
+  useEffect(() => {
+    const handleDataChange = () => {
+      if (__DEV__) console.log('📊 Dashboard: dataChanged - invalidating today + weekly queries')
+      queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+    }
+
+    const handleWordsAdded = (data: { notebookId: string; wordCount: number }) => {
+      if (__DEV__) console.log('📊 Dashboard: wordsAdded - invalidating progress + stats queries', data)
+      if (__DEV__) console.log('📊 Dashboard: Current cache key components - profile:', profile?.id, 'simulatedDay:', currentSimulatedDay)
+      
+      // IMMEDIATE CACHE INVALIDATION with forced refetch for critical data
+      queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+      
+      // CRITICAL: Also invalidate with exact cache keys to ensure cache invalidation works
+      if (profile?.id) {
+        queryClient.invalidateQueries({ queryKey: ['monthly-progress', profile.id, currentSimulatedDay] })
+        queryClient.invalidateQueries({ queryKey: ['daily-progress', profile.id, currentSimulatedDay, 175] })
       }
       
+      // Force immediate refetch of most important data including heatmap and monthly
+      queryClient.refetchQueries({ queryKey: ['today-progress'] })
+      queryClient.refetchQueries({ queryKey: ['total-stats'] })
+      queryClient.refetchQueries({ queryKey: ['daily-progress'] })
+      queryClient.refetchQueries({ queryKey: ['monthly-progress'] })
+      
+      // CRITICAL: Also force refetch with exact cache keys
+      if (profile?.id) {
+        if (__DEV__) console.log('📊 Dashboard: Force refetching monthly with exact key:', ['monthly-progress', profile.id, currentSimulatedDay])
+        queryClient.refetchQueries({ queryKey: ['monthly-progress', profile.id, currentSimulatedDay] })
+      }
+      
+      // Trigger profile refresh for streak updates (recordActivity updates profile)
+      setTimeout(() => {
+        if (profile?.id) {
+          refreshProfile()
+        }
+      }, 500) // Small delay to allow streak update to complete
+    }
+
+    const handleReviewsCompleted = () => {
+      if (__DEV__) console.log('📊 Dashboard: reviewsCompleted - invalidating stats + heatmap queries')
+      // Reviews affect statistics, progress, and daily heatmap
+      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+      
+      // Force immediate refetch for heatmap updates
+      queryClient.refetchQueries({ queryKey: ['daily-progress'] })
+    }
+
+    const handleAppOpened = () => {
+      if (__DEV__) console.log('📊 Dashboard: appOpened - invalidating all dashboard queries')
+      // Full refresh on app open - invalidate all dashboard data
+      queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+    }
+
+    // Set up event listeners
+    const cleanupData = addEventListener('dataChanged', handleDataChange)
+    const cleanupWords = addEventListener('wordsAdded', handleWordsAdded)
+    const cleanupReviews = addEventListener('reviewsCompleted', handleReviewsCompleted)
+    const cleanupApp = addEventListener('appOpened', handleAppOpened)
+
+    return () => {
+      cleanupData()
+      cleanupWords()
+      cleanupReviews()
+      cleanupApp()
+    }
+  }, [addEventListener, queryClient, profile?.id])
+
+  // ===== SUPABASE REALTIME INTEGRATION =====
+  // Real-time database change detection for automatic cache invalidation
+  useEffect(() => {
+    if (!profile?.id) return
+
+    console.log('🔄 Dashboard: Setting up Supabase Realtime subscriptions...')
+
+    // Create realtime channel for dashboard updates
+    const channel = supabase
+      .channel('dashboard-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+          schema: 'public',
+          table: 'words'
+        },
+        (payload) => {
+          console.log('🔄 Realtime: Words table changed', payload.eventType, (payload.new as any)?.id)
+          // IMMEDIATE UPDATES: Words changes affect multiple dashboard queries
+          queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+          queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+          queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
+          queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+          queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+          
+          // Force immediate refetch for critical real-time data including heatmap and monthly
+          queryClient.refetchQueries({ queryKey: ['today-progress'] })
+          queryClient.refetchQueries({ queryKey: ['total-stats'] })
+          queryClient.refetchQueries({ queryKey: ['daily-progress'] })
+          queryClient.refetchQueries({ queryKey: ['monthly-progress'] })
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pages'
+        },
+        (payload) => {
+          console.log('🔄 Realtime: Pages table changed', payload.eventType, (payload.new as any)?.id)
+          // Pages changes mainly affect today and daily progress
+          queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+          queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'reviews'
+        },
+        (payload) => {
+          console.log('🔄 Realtime: Reviews table changed', payload.eventType, (payload.new as any)?.id)
+          // Reviews affect weekly progress and total stats
+          queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+          queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔄 Dashboard Realtime subscription status:', status)
+      })
+
+    // Cleanup subscription
+    return () => {
+      console.log('🔄 Dashboard: Cleaning up Realtime subscriptions')
+      supabase.removeChannel(channel)
+    }
+  }, [profile?.id, queryClient])
+
+  useFocusEffect(
+    useCallback(() => {
       // Initial load only
       if (profile && !hasInitialLoad) {
         if (__DEV__) console.log('📊 Dashboard initial focus load')
@@ -386,8 +608,8 @@ export default function DashboardScreen() {
     console.log(`📊 Multi-notebook goal calculation: ${appState.notebooks.length} notebooks, ${totalDailyGoal} words/day total`)
     
     // All-time mastery rate using real-time data (constant, unaffected by week/month toggle)
-    const totalWordsAdded = totalWordsStats.totalAdded > 0 ? totalWordsStats.totalAdded : (profile?.total_words_added || 0)
-    const totalWordsMastered = totalWordsStats.totalMastered > 0 ? totalWordsStats.totalMastered : (profile?.total_words_mastered || 0)
+    const totalWordsAdded = computedTotalStats.totalAdded > 0 ? computedTotalStats.totalAdded : (profile?.total_words_added || 0)
+    const totalWordsMastered = computedTotalStats.totalMastered > 0 ? computedTotalStats.totalMastered : (profile?.total_words_mastered || 0)
     const masteryRate = totalWordsAdded > 0 ? Math.round((totalWordsMastered / totalWordsAdded) * 100) : 0
     
     if (selectedChartPeriod === 'week') {
@@ -398,25 +620,47 @@ export default function DashboardScreen() {
       startOfWeek.setDate(startOfWeek.getDate() - daysFromMonday)
       startOfWeek.setHours(0, 0, 0, 0)
       
+      // console.log(`🔍 WEEK CALCULATION DEBUG:`);
+      // console.log(`📅 Current date: ${currentDate.toISOString()}`);
+      // console.log(`📅 Start of week: ${startOfWeek.toISOString()}`);
+      // console.log(`📊 Weekly data:`, computedWeeklyData);
+      // console.log(`📊 Total daily goal: ${totalDailyGoal}`);
+      
       // Sum up words added from current week only
       let thisWeekWordsAdded = 0
       
-      weeklyData.forEach((dayData, index) => {
-        // Calculate the actual date for this day in weeklyData
+      computedWeeklyData.forEach((dayData, index) => {
+        // Calculate the actual date for this day in computedWeeklyData
         const dayDate = new Date(currentDate)
-        dayDate.setDate(dayDate.getDate() - (6 - index)) // weeklyData goes from oldest to newest
+        dayDate.setDate(dayDate.getDate() - (6 - index)) // computedWeeklyData goes from oldest to newest
         dayDate.setHours(0, 0, 0, 0)
+        
+        // Only log days with activity
+        // if (dayData.wordsAdded > 0) {
+        //   console.log(`📅 Day ${index} (${dayData.day}): ${dayDate.toISOString()} - ${dayData.wordsAdded} words`);
+        //   console.log(`  Is in current week? ${dayDate >= startOfWeek && dayDate <= currentDate}`);
+        // }
         
         // Only count if this day is in current week
         if (dayDate >= startOfWeek && dayDate <= currentDate) {
           thisWeekWordsAdded += dayData.wordsAdded
+          // Only log when words are actually added
+          // if (dayData.wordsAdded > 0) {
+          //   console.log(`  ✅ Added ${dayData.wordsAdded} words to week total`);
+          // }
         }
       })
       
       const weeklyGoal = totalDailyGoal * 7
       const addedProgress = weeklyGoal > 0 ? Math.min(100, Math.round((thisWeekWordsAdded / weeklyGoal) * 100)) : 0
       
-      return {
+      console.log(`📊 WEEK TOTAL: ${thisWeekWordsAdded}/${weeklyGoal} words (${addedProgress}%)`);
+      // console.log(`📊 FINAL WEEK CALCULATION:`);
+      // console.log(`  This week words added: ${thisWeekWordsAdded}`);
+      // console.log(`  Weekly goal: ${weeklyGoal}`);
+      // console.log(`  Progress percentage: ${addedProgress}%`);
+      
+      const result = {
         wordsAdded: {
           current: thisWeekWordsAdded,
           goal: weeklyGoal,
@@ -428,6 +672,9 @@ export default function DashboardScreen() {
           percentage: masteryRate
         }
       }
+      
+      console.log(`🎯 WEEK RESULT:`, result);
+      return result
     } else {
       // Calculate start of current month (1st day)
       const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
@@ -439,19 +686,36 @@ export default function DashboardScreen() {
       // Sum up words added from current month only
       let thisMonthWordsAdded = 0
       
-      monthlyData.forEach((monthData) => {
-        // Check if this month entry corresponds to current month
-        // monthlyData uses month abbreviations like 'Jan', 'Feb', etc.
-        const currentMonthAbbr = currentDate.toLocaleDateString('en-US', { month: 'short' })
+      // Create month abbreviation mapping for reliable comparison
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      const currentMonthAbbr = monthNames[currentDate.getMonth()] // 0-based month index
+      
+      // console.log(`🔍 MONTH MATCHING DEBUG:`);
+      // console.log(`📅 Current date: ${currentDate.toISOString()}`);
+      // console.log(`📅 Current month index: ${currentDate.getMonth()}`);
+      // console.log(`📅 Expected month abbr: ${currentMonthAbbr}`);
+      // console.log(`📊 Available monthly data:`, computedMonthlyData.map(m => ({ month: m.month, words: m.wordsAdded })));
+      
+      computedMonthlyData.forEach((monthData) => {
+        // console.log(`📅 Checking month data: ${monthData.month} vs ${currentMonthAbbr}`);
         if (monthData.month === currentMonthAbbr) {
           thisMonthWordsAdded = monthData.wordsAdded
+          console.log(`✅ Found matching month: ${monthData.month} with ${monthData.wordsAdded} words`);
         }
       })
       
       const monthlyGoal = totalDailyGoal * daysInMonth
       const addedProgress = monthlyGoal > 0 ? Math.min(100, Math.round((thisMonthWordsAdded / monthlyGoal) * 100)) : 0
       
-      return {
+      console.log(`📊 MONTH TOTAL: ${thisMonthWordsAdded}/${monthlyGoal} words (${addedProgress}%)`);
+      // console.log(`🔍 MONTH CALCULATION DEBUG:`);
+      // console.log(`📅 Current month abbr: ${currentDate.toLocaleDateString('en-US', { month: 'short' })}`);
+      // console.log(`📊 Monthly data:`, computedMonthlyData);
+      // console.log(`📊 This month words added: ${thisMonthWordsAdded}`);
+      // console.log(`📊 Monthly goal: ${monthlyGoal}`);
+      // console.log(`📊 Progress percentage: ${addedProgress}%`);
+      
+      const result = {
         wordsAdded: {
           current: thisMonthWordsAdded,
           goal: monthlyGoal,
@@ -463,12 +727,15 @@ export default function DashboardScreen() {
           percentage: masteryRate
         }
       }
+      
+      console.log(`🎯 MONTH RESULT:`, result);
+      return result
     }
-  }, [selectedChartPeriod, weeklyData, monthlyData, appState.notebooks, getCurrentDate, profile, totalWordsStats])
+  }, [selectedChartPeriod, computedWeeklyData, computedMonthlyData, appState.notebooks, getCurrentDate, profile, computedTotalStats])
 
   // Circular chart data based on selected period
   const getCircularData = () => {
-    const weeklyTotal = weeklyData.reduce((total, day) => total + day.wordsAdded, 0)
+    const weeklyTotal = computedWeeklyData.reduce((total, day) => total + day.wordsAdded, 0)
     const monthlyTotal = weeklyTotal * 4 // Approximate monthly data
     
     switch (selectedPeriod) {
@@ -495,7 +762,7 @@ export default function DashboardScreen() {
   }
 
   // Use real activity data or fallback to empty (7 rows × 25 columns)
-  const habitHeatmapData = activityData.length > 0 ? activityData : 
+  const habitHeatmapData = computedActivityData.length > 0 ? computedActivityData : 
     Array.from({ length: 7 }, () => Array(25).fill(0))
 
 
@@ -564,7 +831,7 @@ export default function DashboardScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={<RefreshControl refreshing={refreshing || isAnyLoading} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
@@ -632,7 +899,7 @@ export default function DashboardScreen() {
             </View>
             <View style={styles.streakMasteredItem}>
               <Text style={styles.streakMasteredEmoji}>⭐</Text>
-              <Text style={styles.streakMasteredValue}>{totalWordsStats.totalMastered}</Text>
+              <Text style={styles.streakMasteredValue}>{computedTotalStats.totalMastered}</Text>
               <Text style={styles.streakMasteredLabel}>Total Mastered</Text>
             </View>
           </View>
@@ -704,25 +971,25 @@ export default function DashboardScreen() {
         <View style={styles.section3Card}>
           <View style={styles.keyStatsGrid}>
             <View style={styles.keyStatCard}>
-              <Text style={styles.keyStatValue}>{totalWordsStats.totalAdded}</Text>
+              <Text style={styles.keyStatValue}>{computedTotalStats.totalAdded}</Text>
               <Text style={styles.keyStatLabel}>Total Vocabulary</Text>
             </View>
             <View style={styles.keyStatCard}>
-              <Text style={styles.keyStatValue}>{totalWordsStats.totalMastered}</Text>
+              <Text style={styles.keyStatValue}>{computedTotalStats.totalMastered}</Text>
               <Text style={styles.keyStatLabel}>Words Mastered</Text>
             </View>
           </View>
           <View style={styles.keyStatsGrid}>
             <View style={styles.keyStatCard}>
               <Text style={styles.keyStatValue}>
-                {totalWordsStats.totalAdded > 0 
-                  ? Math.round((totalWordsStats.totalMastered / totalWordsStats.totalAdded) * 100)
+                {computedTotalStats.totalAdded > 0 
+                  ? Math.round((computedTotalStats.totalMastered / computedTotalStats.totalAdded) * 100)
                   : 0}%
               </Text>
               <Text style={styles.keyStatLabel}>Success Rate</Text>
             </View>
             <View style={styles.keyStatCard}>
-              <Text style={styles.keyStatValue}>{todayProgress.wordsAdded}</Text>
+              <Text style={styles.keyStatValue}>{computedTodayProgress.wordsAdded}</Text>
               <Text style={styles.keyStatLabel}>Words Today</Text>
             </View>
           </View>
@@ -1237,7 +1504,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     maxWidth: 400,
-    ...SHADOWS.medium,
+    ...SHADOWS.md,
   },
   upgradeIcon: {
     fontSize: 64,

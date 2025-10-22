@@ -28,7 +28,7 @@ export default function WordSavePage() {
   }>()
   
   const { recordUserActivity, profile } = useAuth()
-  const { refreshNotebooks, updateNotebookLastUsed } = useApp()
+  const { refreshNotebooks, updateNotebookLastUsed, emitEvent } = useApp()
   const [isLoading, setIsLoading] = useState(true)
   const [hasStartedSave, setHasStartedSave] = useState(false)
   const [previousStreak, setPreviousStreak] = useState<number | undefined>()
@@ -58,6 +58,9 @@ export default function WordSavePage() {
 
   const handleSaveWords = async () => {
     try {
+      // OPTIMISTIC UPDATE: Emit event immediately for instant UI feedback
+      emitEvent('wordsAdded', { notebookId: notebookId!, wordCount: parsedWords.length })
+      
       // Get or create today's page
       const currentPage = await supabaseService.getTodaysPage(notebookId!)
       if (!currentPage) {
@@ -85,11 +88,6 @@ export default function WordSavePage() {
       
       // Record streak activity for adding words
       await recordUserActivity()
-      
-      // Immediately update progress without database refetch
-      if (typeof window !== 'undefined' && (window as any).onWordsAdded) {
-        (window as any).onWordsAdded(notebookId!, parsedWords.length)
-      }
 
       // Update notebook last used for smart ordering
       updateNotebookLastUsed(notebookId!)
@@ -110,10 +108,8 @@ export default function WordSavePage() {
   }
 
   const handleClose = () => {
-    // Set flag that words were added for home screen to detect
-    if (typeof window !== 'undefined') {
-      (window as any).wordsJustAdded = true
-    }
+    // Emit event for screens to detect data changes (replaces window.wordsJustAdded)
+    emitEvent('dataChanged', {})
     
     // Navigate directly to home page using replace for proper navigation
     router.replace('/(tabs)/')
