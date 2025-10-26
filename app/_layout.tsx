@@ -9,6 +9,8 @@ import { ThemeProvider } from '@/lib/contexts/ThemeContext';
 import { DevTimeProvider } from '@/lib/contexts/DevTimeContext';
 import { SubscriptionProvider } from '@/lib/contexts/SubscriptionContext';
 import { QueryProvider } from '@/lib/contexts/QueryProvider';
+import { ReduxProvider } from '@/lib/contexts/ReduxProvider';
+import { SurveyProvider } from '@/lib/contexts/SurveyContext';
 import { DevTimeConnector } from '@/components/DevTimeConnector';
 import AuthGuard from '@/components/AuthGuard';
 
@@ -19,19 +21,23 @@ export const unstable_settings = {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <DevTimeProvider>
-        <ThemeProvider>
-          <AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <DevTimeProvider>
             <QueryProvider>
               <SubscriptionProvider>
                 <AppProvider>
-                  <AppWithTheme />
+                  <ReduxProvider>
+                    <SurveyProvider>
+                      <AppWithTheme />
+                    </SurveyProvider>
+                  </ReduxProvider>
                 </AppProvider>
               </SubscriptionProvider>
             </QueryProvider>
-          </AuthProvider>
-        </ThemeProvider>
-      </DevTimeProvider>
+          </DevTimeProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }
@@ -45,6 +51,7 @@ function AppWithTheme() {
       <AuthGuard>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+          <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen 
             name="notebook/[id]/index" 

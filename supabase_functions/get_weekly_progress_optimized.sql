@@ -5,7 +5,7 @@ CREATE OR REPLACE FUNCTION get_weekly_progress_optimized(
   p_current_date date DEFAULT CURRENT_DATE
 )
 RETURNS TABLE(
-  day text,
+  day_name text,
   words_added bigint,
   words_remembered bigint,
   completed boolean
@@ -57,7 +57,7 @@ BEGIN
     GROUP BY ds.date
   )
   SELECT 
-    day_names[(EXTRACT(DOW FROM ds.date)::integer) + 1] as day,
+    day_names[(EXTRACT(DOW FROM ds.date)::integer) + 1] as day_name,
     COALESCE(dw.words_added, 0)::bigint as words_added,
     COALESCE(dr.words_remembered, 0)::bigint as words_remembered,
     COALESCE(dw.words_added, 0) >= COALESCE(dg.daily_goal, 10) as completed

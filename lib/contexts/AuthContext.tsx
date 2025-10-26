@@ -22,6 +22,7 @@ interface AuthContextType {
   getStreakStatus: () => Promise<{streak_count: number, days_missed: number, is_at_risk: boolean} | null>
   recordUserActivity: () => Promise<void>
   validateDailyStreak: (currentDate?: Date) => Promise<void>
+  completeOnboarding: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -435,6 +436,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
+  async function completeOnboarding() {
+    if (!session?.user?.id) {
+      console.error('🔒 AuthContext: Cannot complete onboarding - no user session')
+      return
+    }
+
+    try {
+      console.log('🎯 AuthContext: Marking onboarding as completed')
+      
+      // Update profile in database
+      const { error } = await supabase
+        .from('profiles')
+        .update({ onboarding_completed: true })
+        .eq('id', session.user.id)
+
+      if (error) {
+        console.error('🔒 AuthContext: Error completing onboarding:', error)
+        throw error
+      }
+
+      // Refresh profile to get updated data
+      await refreshProfile()
+      
+      console.log('✅ AuthContext: Onboarding completed successfully')
+    } catch (error) {
+      console.error('🔒 AuthContext: Failed to complete onboarding:', error)
+      throw error
+    }
+  }
+
   async function validateDailyStreak(currentDate?: Date) {
     const today = (currentDate || new Date()).toISOString().split('T')[0]
     console.log(`🔥 AuthContext: validateDailyStreak called for ${today}`)
@@ -520,6 +551,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     getStreakStatus: getUserStreakStatus,
     recordUserActivity,
     validateDailyStreak,
+    completeOnboarding,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

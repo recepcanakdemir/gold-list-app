@@ -1,8 +1,9 @@
 import React from 'react'
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useSubscription } from '@/lib/contexts/SubscriptionContext'
+import { useProgressManager } from '@/lib/hooks/useProgressManager'
 import { TYPOGRAPHY, SPACING, RADIUS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 
@@ -24,29 +25,38 @@ export function SharedHeader({
   const router = useRouter()
   const { profile } = useAuth()
   const { subscription, showPaywallModal } = useSubscription()
+  const { state: progressState } = useProgressManager()
   const { colors } = useTheme()
   const styles = createStyles(colors)
 
+  // Use ProgressManager as primary source, profile as fallback for consistency
+  const currentStreak = progressState.streakCount !== undefined ? progressState.streakCount : (profile?.streak_count || 0)
+
   return (
     <View style={styles.header}>
-      {showBackButton ? (
-        <>
-          <TouchableOpacity onPress={() => {
-            if (router.canGoBack()) {
-              router.back()
-            } else {
-              router.push('/(tabs)/')
-            }
-          }} style={styles.backButton}>
-            <Text style={styles.backButtonText}>←</Text>
-          </TouchableOpacity>
-          <View style={styles.centerTitle}>
+      <View style={styles.headerLeft}>
+        <Image 
+          source={require('@/images/gold_list_icon.png')} 
+          style={styles.appIcon}
+          resizeMode="contain"
+        />
+        {showBackButton ? (
+          <>
+            <TouchableOpacity onPress={() => {
+              if (router.canGoBack()) {
+                router.back()
+              } else {
+                router.push('/(tabs)/')
+              }
+            }} style={styles.backButton}>
+              <Text style={styles.backButtonText}>←</Text>
+            </TouchableOpacity>
             <Text style={styles.pageTitle}>{title}</Text>
-          </View>
-        </>
-      ) : (
-        <Text style={styles.logo}>{title}</Text>
-      )}
+          </>
+        ) : (
+          <Text style={styles.logo}>{title}</Text>
+        )}
+      </View>
       
       <View style={styles.headerRight}>
         {/* Subscription Status Badge */}
@@ -67,13 +77,8 @@ export function SharedHeader({
         
         <View style={styles.streakContainer}>
           <Text style={styles.streakIcon}>🔥</Text>
-          <Text style={styles.streakCount}>{profile?.streak_count || 0}</Text>
+          <Text style={styles.streakCount}>{currentStreak}</Text>
         </View>
-        <TouchableOpacity style={styles.notificationButton} onPress={() => router.push('/modal/notifications')}>
-          <View style={styles.notificationIcon}>
-            <Text style={styles.notificationIconText}>🔔</Text>
-          </View>
-        </TouchableOpacity>
         {showSettingsButton && (
           <TouchableOpacity style={styles.settingsButton} onPress={() => router.push('/(tabs)/settings')}>
             <View style={styles.settingsIcon}>
@@ -100,6 +105,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     paddingTop: SPACING.lg,
     paddingBottom: SPACING.xl,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  appIcon: {
+    width: 28,
+    height: 28,
+    marginRight: SPACING.sm,
+  },
   logo: {
     fontSize: TYPOGRAPHY['2xl'],
     fontWeight: TYPOGRAPHY.bold,
@@ -112,6 +127,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     backgroundColor: colors.gray100,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: SPACING.sm,
   },
   backButtonText: {
     fontSize: TYPOGRAPHY.xl,
@@ -135,21 +151,6 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontWeight: TYPOGRAPHY.semibold,
     color: colors.primary,
   },
-  notificationButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.gray100,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  notificationIcon: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  notificationIconText: {
-    fontSize: TYPOGRAPHY.lg,
-  },
   settingsButton: {
     width: 40,
     height: 40,
@@ -164,11 +165,6 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   settingsIconText: {
     fontSize: TYPOGRAPHY.lg,
-  },
-  centerTitle: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: SPACING.md,
   },
   pageTitle: {
     fontSize: TYPOGRAPHY.lg,

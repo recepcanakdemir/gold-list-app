@@ -1,0 +1,185 @@
+
+Uygulamaya bir onboarding (karşılama ve tanıtım) süreci eklemek istiyorum. Bu onboarding süreci, uygulamanın 
+dönüşüm oranı açısından çok kritik olacak. Kullanıcıların hem yöntemin hem de uygulamanın değerini hissetmelerini istiyorum. 
+Yaklaşık 17-20 sayfalık bir onboarding süreci olmasını planlıyorum. 
+Bu süreçte yöntemi tanıtmak, sorular sormak ve uygulamayı kişiselleştirmek istiyorum.
+
+Onboarding bölümleri şunlar olacak:
+
+Gold List Method App — Detailed Onboarding Flow
+1. Welcome Screen
+
+Logo: Placeholder for now
+Purpose: Create emotional connection and make the user feel they made the right choice.
+Headline: “Welcome to your new way of remembering.”
+Subtext: “You’ve just chosen a scientifically proven path to mastering vocabulary without stress.”
+CTA: “Continue”
+Integration: Simple /app/onboarding/welcome.tsx screen.
+
+2. Sign In / Register
+
+Purpose: Allow new users to sign up or existing users to log in.
+Headline: “Sign in or create your account.”
+Options: Continue with Apple, Continue with Email.
+Text: “Already have an account? Log in” and “Skip for now.”
+Integration: /app/(auth)/signin.tsx reused. If the user already completed onboarding, skip to the main app.
+
+3. Learn with Science
+
+Purpose: Present the scientific foundation behind the method.
+Headline: “Learn with Science.”
+Subtext: “The Gold List Method lets your brain naturally remember words. It focuses on long-term memory.”
+CTA: “Show me more.”
+
+4. Structured Progress
+
+Purpose: Explain the main process flow of the method.
+Headline: “Structured, but stress-free.”
+Subtext: “Add words daily, review them every 14 days, and let your memory do the rest.”
+CTA: “Continue.”
+
+5. Track, Reflect, Grow
+
+Purpose: Show the app’s analytical and motivational value.
+Headline: “Track. Reflect. Grow.”
+Subtext: “Get insights on progress, mastery rate, and long-term retention — all automatically.”
+CTA: “Continue.”
+
+6. Support & Rating
+
+Purpose: Build emotional connection and gather early feedback.
+Headline: “Your support matters.”
+Subtext: “We’re a small team building tools for language learners like you. Would you like to rate us later?”
+Buttons: “Remind me later” / “Sure.”
+
+7. Science Behind the Method
+
+Purpose: Build credibility and curiosity.
+Headline: “The Science Behind It.”
+Subtext: “Spacing, relaxation, and natural recall strengthen memory — that’s how the Gold List Method works.”
+CTA: “Tell me how it works.”
+
+8. Step 1 – Add Words
+
+Purpose: Explain the first stage of the Gold List process.
+Subtext: “Every day, add 10, 15, 20, or 25 words. Just once — no forced repetition.”
+
+9. Step 2 – Wait 14 Days
+
+Purpose: Show the importance of the incubation period.
+Subtext: “Let your brain process what you’ve learned naturally. No reviews until 14 days later.”
+
+10. Step 3 – Review and Filter
+
+Purpose: Explain how forgetting and remembering are part of the process.
+Main Text: “Magic Starts.”
+Subtext: “After 14 days, review your list. Keep forgotten words, archive remembered ones.”
+
+11. Step 4 – Progress Through Rounds
+
+Purpose: Show the longer-term pattern of learning.
+Subtext: “Each forgotten word moves to the next round. After four rounds, most words stay permanently.”
+Visual: Display round example cards in 3 rows of 4 cards:
+
+Bronze Level: R1, R2, R3, R4
+
+Silver Level: R1, R2, R3, R4
+
+Gold Level: R1, R2, R3, R4
+Each card should have its own specific round color.
+CTA: “Continue.”
+
+12. Step 5 – What Gold List Method Focuses On
+
+Purpose: Emphasize the philosophy of the method.
+Main Text: “When you remember a word, it’s done — it will never be asked again, because you remembered it after 14 days.”
+Subtext: “Each forgotten word moves to the next round. After four rounds, most words stay permanently.”
+CTA: “Continue.”
+
+13. Personalization Introduction
+
+Purpose: Transition to the questionnaire.
+Headline: “Before we start…”
+Subtext: “Let’s personalize your learning journey.”
+
+14. User Survey (Multi-Step Carousel)
+
+Purpose: Collect data for a customized experience.
+Questions:
+
+Where did you hear about us? (App Store, Friend, YouTube, Instagram, TikTok, Reddit, Other)
+
+Which language are you learning? (dropdown)
+
+What’s your current level? (A1, A2, B1, B2, C1, C2)
+
+What’s your biggest challenge? (Remembering words, Motivation, Time, Consistency)
+
+How’s your long-term memory? (Strong, Average, Needs improvement)
+
+Have you used the Gold List Method before? (Yes, I’m familiar / I’ve heard of it / No, this is new to me)
+
+How many words do you encounter that you don’t know daily? (slider: 10, 100, 100+)
+
+Where do you find new words? (Books, YouTube, Movies, Social Media, Conversations, Lessons)
+
+Why do you want to learn a new language? (Education, Socializing, Finding Love, Moving to Another Country, etc.)
+CTA: “Continue.”
+
+15. Customization Loading Screen
+
+Purpose: Simulate AI-driven personalization.
+Headline: “We’re setting up your plan…”
+Subtext: “Analyzing your input and optimizing your learning schedule.”
+Integration: Use Supabase RPC to calculate insights and display a progress bar.
+
+16. Personalized Insights
+
+Purpose: Show personalized results and statistics.
+Headline: “Your Personalized Insights.”
+Text Example:
+
+“Add 15 words daily → You’ll learn about 3,600 words per year.”
+
+“Your first review day will be in 14 days.”
+CTA: “See My Roadmap.”
+
+17. One-Month Learning Roadmap
+
+Purpose: Visualize how the method works over time.
+Headline: “Your 1-Month Journey.”
+Subtext: “Here’s your first month’s plan — color-coded by activity.”
+Color Legend:
+
+Add words: Yellow
+
+Review: Red
+
+Round 2 reviews: Blue
+
+Rest days: Green
+Integration: Use calendar view (react-native-calendars or Skia).
+CTA: “Continue.”
+
+18. Save Your Journey (Second Sign-In)
+
+Purpose: Encourage users who skipped sign-in earlier to log in before continuing.
+Headline: “Save Your Journey.”
+Subtext: “Sign in to sync your progress and keep your personalized plan safe.”
+CTA: “Sign In / Continue with Google.”
+
+19. Paywall
+
+Purpose: Present subscription and premium options.
+Headline: “Invest in Your Language Journey.”
+Subtext: “Unlock full access: reviews, streak tracking, AI sentence generation, and lifetime insights.”
+Pricing Options: Monthly / Annual / Lifetime
+CTA: “Start Learning Now.”
+
+20. Completion Screen
+
+Purpose: End onboarding with motivation and a sense of accomplishment.
+Headline: “You’re All Set!”
+Subtext: “Welcome to your personalized Gold List journey. Let’s start your first page.”
+CTA: “Go to Dashboard.”
+Integration: Marks onboarding as complete in the profiles table (has_completed_onboarding = true).

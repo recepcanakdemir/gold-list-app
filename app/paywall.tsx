@@ -1,5 +1,6 @@
 import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useAuth } from '@/lib/contexts/AuthContext'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useRouter } from 'expo-router'
@@ -17,14 +18,18 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 export default function PaywallPage() {
   const router = useRouter()
   const { colors } = useTheme()
-  const { plans, activateSubscription, startFreeTrial, getUserState, canExitPaywall } = useSubscription()
+  const { profile } = useAuth()
+  const { plans, activateSubscription, startFreeTrial, getUserState, canExitPaywall, subscription } = useSubscription()
   const [selectedPlan, setSelectedPlan] = useState('weekly') // Default to weekly since trial is enabled by default
   const [loading, setLoading] = useState(false)
   const [trialLoading, setTrialLoading] = useState(false)
-  const [enableFreeTrial, setEnableFreeTrial] = useState(true) // Default to trial enabled for better UX
-
+  
   const userState = getUserState()
   const isExitable = canExitPaywall()
+  
+  // Only pre-trial users should see and be able to use free trial
+  const canUseTrial = userState === 'pre-trial'
+  const [enableFreeTrial, setEnableFreeTrial] = useState(canUseTrial)
 
   const styles = createStyles(colors)
 
@@ -33,10 +38,11 @@ export default function PaywallPage() {
     try {
       const success = await activateSubscription(selectedPlan as any)
       if (success) {
+        const redirectTarget = profile?.onboarding_completed ? '/(tabs)' : '/(onboarding)/completion'
         Alert.alert(
           'Welcome to Premium!',
           'Your subscription has been activated. You now have unlimited access to all features.',
-          [{ text: 'Start Learning', onPress: () => router.replace('/(tabs)') }]
+          [{ text: 'Start Learning', onPress: () => router.replace(redirectTarget) }]
         )
       } else {
         Alert.alert('Error', 'Failed to activate subscription. Please try again.')
@@ -54,19 +60,21 @@ export default function PaywallPage() {
     try {
       const success = await startFreeTrial()
       if (success) {
+        const redirectTarget = profile?.onboarding_completed ? '/(tabs)' : '/(onboarding)/completion'
         Alert.alert(
           '🎉 Trial Started!',
-          'You now have 15 days of full access to all premium features. Start learning with unlimited vocabulary!',
-          [{ text: 'Start Learning', onPress: () => router.replace('/(tabs)') }]
+          'You now have 14 days of full access to all premium features. Start learning with unlimited vocabulary!',
+          [{ text: 'Start Learning', onPress: () => router.replace(redirectTarget) }]
         )
+        // Keep trialLoading true until navigation - prevents X button from reappearing
       } else {
         Alert.alert('Error', 'Failed to start trial. Please try again.')
+        setTrialLoading(false) // Only reset on failure
       }
     } catch (error) {
       console.error('Trial start error:', error)
       Alert.alert('Error', 'An error occurred. Please try again.')
-    } finally {
-      setTrialLoading(false)
+      setTrialLoading(false) // Only reset on error
     }
   }
 
@@ -104,8 +112,11 @@ export default function PaywallPage() {
 
   const getCurrentPlan = () => plans.find(p => p.id === selectedPlan)
 
-  // Handle toggle changes
+  // Handle toggle changes (only for pre-trial users)
   const handleTrialToggle = (enabled: boolean) => {
+    // Only allow toggle changes for pre-trial users
+    if (!canUseTrial) return
+    
     setEnableFreeTrial(enabled)
     if (enabled) {
       // Auto-select weekly plan when trial is enabled
@@ -129,7 +140,7 @@ export default function PaywallPage() {
         
         {/* Compact Header */}
         <View style={styles.header}>
-          {isExitable && (
+          {isExitable && !trialLoading && !loading && (
             <TouchableOpacity style={styles.closeButton} onPress={handleBack}>
               <Ionicons name="close" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
@@ -222,14 +233,15 @@ export default function PaywallPage() {
           <Text style={styles.autoRenewableText}>Auto-renewable until canceled</Text>
         </View>
 
-        {/* Free Trial Toggle */}
-        <View style={styles.trialToggleSection}>
+        {/* Free Trial Toggle - Only show for pre-trial users */}
+        {canUseTrial && (
+          <View style={styles.trialToggleSection}>
           <TouchableOpacity 
             style={styles.toggleContainer}
             onPress={() => handleTrialToggle(!enableFreeTrial)}
           >
             <View style={styles.toggleInfo}>
-              <Text style={styles.toggleTitle}>Enable 15-day free trial</Text>
+              <Text style={styles.toggleTitle}>Enable 14-day free trial</Text>
               <Text style={styles.toggleSubtitle}>
                 {enableFreeTrial ? 'Selecting weekly plan for trial access' : 'Choose any plan for direct subscription'}
               </Text>
@@ -248,11 +260,34 @@ export default function PaywallPage() {
               </View>
               <View style={styles.trialInfoRow}>
                 <Ionicons name="time-outline" size={14} color={colors.primary} />
-                <Text style={styles.trialInfoText}>15 days free then {plans.find(p => p.id === 'weekly')?.price || '$4.99'} per week</Text>
+                <Text style={styles.trialInfoText}>14 days free then {plans.find(p => p.id === 'weekly')?.price || '$4.99'} per week</Text>
               </View>
             </View>
           )}
-        </View>
+          </View>
+        )}
+
+        {/* User State Information - Show for non-pre-trial users */}
+        {!canUseTrial && (
+          <View style={styles.userStateInfo}>
+            <View style={styles.userStateContainer}>
+              <Ionicons 
+                name={
+                  userState === 'trial' ? 'time-outline' : 
+                  userState === 'post-trial' ? 'checkmark-circle-outline' : 
+                  'diamond-outline'
+                } 
+                size={16} 
+                color={colors.primary} 
+              />
+              <Text style={styles.userStateText}>
+                {userState === 'trial' && `Trial Active (${subscription.trialDaysRemaining} days remaining)`}
+                {userState === 'post-trial' && 'Trial completed - Upgrade to continue learning'}
+                {userState === 'premium' && `Premium Active (${subscription.tier})`}
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Compact CTA */}
         <TouchableOpacity
@@ -271,13 +306,13 @@ export default function PaywallPage() {
             <Text style={styles.ctaText}>
               {loading || trialLoading ? 'Starting...' : 
                 (userState === 'pre-trial' && enableFreeTrial) ? 
-                  'Start 15-Day Free Trial' : 
+                  'Start 14-Day Free Trial' : 
                   `Subscribe ${getCurrentPlan()?.name}`}
             </Text>
           </LinearGradient>
         </TouchableOpacity>
 
-        {/* Trial Banner only when trial is enabled */}
+        {/* Trial Banner only when trial is enabled for pre-trial users */}
         {userState === 'pre-trial' && enableFreeTrial && (
           <Text style={styles.trialNote}>
             Free trial • Cancel anytime • No commitment
@@ -601,5 +636,28 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     textDecorationLine: 'underline',
+  },
+
+  // User State Information Section
+  userStateInfo: {
+    marginBottom: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  userStateContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  userStateText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    flex: 1,
+    lineHeight: 18,
   },
 })

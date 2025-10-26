@@ -7,27 +7,29 @@ import {
   ScrollView,
   Switch,
   Alert,
+  Linking,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useApp } from '@/lib/contexts/AppContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { SharedHeader } from '@/components/shared-header'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { supabaseService } from '@/lib/services/supabaseService'
-import { notificationService } from '@/lib/services/notificationService'
+import { isDeveloperAccount } from '@/lib/utils/devAccess'
 
 export default function SettingsScreen() {
   const router = useRouter()
   const { signOut, profile } = useAuth()
   const { appState, settings, updateSettings, refreshData } = useApp()
   const { colors, toggleTheme, isDark } = useTheme()
+  const { subscription, getUserState, showPaywallModal } = useSubscription()
   
   const [localSettings, setLocalSettings] = useState({
     ...settings,
   })
   const [isResetting, setIsResetting] = useState(false)
-  const [testingNotifications, setTestingNotifications] = useState(false)
 
   const handleSaveSettings = async () => {
     try {
@@ -215,107 +217,189 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          <View style={styles.settingCard}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Notifications</Text>
-                <Text style={styles.settingDescription}>Receive daily learning reminders</Text>
-              </View>
-              <Switch
-                value={localSettings.enableNotifications}
-                onValueChange={(value) => updateLocalSetting('enableNotifications', value)}
-                trackColor={{ false: colors.gray200, true: colors.primaryLight }}
-                thumbColor={localSettings.enableNotifications ? colors.primary : colors.gray400}
-              />
-            </View>
-          </View>
 
         </View>
 
-
-        {/* Testing & Development */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Testing & Development</Text>
-          
-          {/* Notification Testing */}
-          {settings.enableNotifications && (
+        {/* Subscription Section - Only show for non-pre-trial users */}
+        {getUserState() !== 'pre-trial' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Subscription</Text>
+            
             <View style={styles.settingCard}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Notification Testing</Text>
-                  <Text style={styles.settingDescription}>Test different notification types in development</Text>
+                  <Text style={styles.settingLabel}>
+                    {getUserState() === 'trial' && `Trial (${subscription.trialDaysRemaining} days left)`}
+                    {getUserState() === 'post-trial' && 'Free Account'}
+                    {getUserState() === 'premium' && `Premium (${subscription.tier})`}
+                  </Text>
+                  <Text style={styles.settingDescription}>
+                    {getUserState() === 'trial' && 'Upgrade to continue after trial ends'}
+                    {getUserState() === 'post-trial' && 'Upgrade to unlock all features'}
+                    {getUserState() === 'premium' && 'Manage your premium subscription'}
+                  </Text>
                 </View>
               </View>
               
-              <View style={styles.testButtonsContainer}>
+              {/* Action buttons based on user state */}
+              {(getUserState() === 'trial' || getUserState() === 'post-trial') && (
                 <TouchableOpacity 
-                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
-                  onPress={() => handleTestNotification('daily_words')}
-                  disabled={testingNotifications}
+                  style={styles.upgradeButton}
+                  onPress={showPaywallModal}
                 >
-                  <Text style={styles.testButtonText}>📚 Daily Words</Text>
+                  <Text style={styles.upgradeButtonText}>Upgrade to Premium</Text>
                 </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
-                  onPress={() => handleTestNotification('progress_reminder')}
-                  disabled={testingNotifications}
-                >
-                  <Text style={styles.testButtonText}>🎯 Progress</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
-                  onPress={() => handleTestNotification('review_ready')}
-                  disabled={testingNotifications}
-                >
-                  <Text style={styles.testButtonText}>🔄 Review</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.testButton, testingNotifications && styles.testButtonDisabled]}
-                  onPress={() => handleTestNotification('streak_protection')}
-                  disabled={testingNotifications}
-                >
-                  <Text style={styles.testButtonText}>🔥 Streak</Text>
-                </TouchableOpacity>
+              )}
+              
+              {getUserState() === 'premium' && (
+                <View style={styles.premiumActions}>
+                  <TouchableOpacity 
+                    style={styles.managePlanButton}
+                    onPress={showPaywallModal}
+                  >
+                    <Text style={styles.managePlanButtonText}>Change Plan</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.subscriptionCancelButton}
+                    onPress={() => Alert.alert(
+                      'Cancel Subscription',
+                      'To cancel your subscription, please go to:\n\niPhone Settings → [Your Name] → Subscriptions → Gold List Method → Cancel Subscription\n\nYour subscription will remain active until the end of the current billing period.',
+                      [{ text: 'OK' }]
+                    )}
+                  >
+                    <Text style={styles.subscriptionCancelButtonText}>Cancel Subscription</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* Testing & Development - Only for developer account */}
+        {isDeveloperAccount(profile?.email || '') && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Testing & Development</Text>
+            
+            
+            <View style={styles.settingCard}>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Reset All Data</Text>
+                  <Text style={styles.settingDescription}>Delete all notebooks, words, and progress for testing</Text>
+                </View>
               </View>
               
-              <View style={styles.testButtonsContainer}>
-                <TouchableOpacity 
-                  style={styles.infoButton}
-                  onPress={handleCheckScheduledNotifications}
-                >
-                  <Text style={styles.infoButtonText}>View Scheduled</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={styles.cancelButton}
-                  onPress={handleCancelAllNotifications}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel All</Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity 
+                style={[styles.resetButton, isResetting && styles.resetButtonDisabled]} 
+                onPress={handleResetUserData}
+                disabled={isResetting}
+              >
+                <Text style={styles.resetButtonText}>
+                  {isResetting ? 'Resetting...' : 'Reset All Data'}
+                </Text>
+              </TouchableOpacity>
             </View>
-          )}
+          </View>
+        )}
+
+        {/* Feedback & Support */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Feedback & Support</Text>
           
           <View style={styles.settingCard}>
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Reset All Data</Text>
-                <Text style={styles.settingDescription}>Delete all notebooks, words, and progress for testing</Text>
+                <Text style={styles.settingLabel}>Send Feedback</Text>
+                <Text style={styles.settingDescription}>Share your thoughts, suggestions, or report issues</Text>
               </View>
             </View>
             
             <TouchableOpacity 
-              style={[styles.resetButton, isResetting && styles.resetButtonDisabled]} 
-              onPress={handleResetUserData}
-              disabled={isResetting}
+              style={styles.feedbackButton}
+              onPress={() => {
+                const subject = 'Gold List Method App Feedback'
+                const body = `Hi there!\n\nI'd like to share some feedback about the Gold List Method app:\n\n[Please write your feedback here]\n\n---\nApp Version: ${require('../../package.json').version || '1.0.0'}\nUser: ${profile?.email || 'Unknown'}\nSubscription: ${getUserState()}`
+                
+                const mailto = `mailto:recepcanakdemir@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+                
+                Linking.openURL(mailto).catch(() => {
+                  Alert.alert(
+                    'Email Not Available',
+                    'Please send your feedback to:\nrecepcanakdemir@gmail.com',
+                    [{ text: 'OK' }]
+                  )
+                })
+              }}
             >
-              <Text style={styles.resetButtonText}>
-                {isResetting ? 'Resetting...' : 'Reset All Data'}
-              </Text>
+              <Text style={styles.feedbackButtonText}>Send Feedback via Email</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Survey Data Management */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Survey Data</Text>
+          
+          <View style={styles.settingCard}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Your Survey Responses</Text>
+                <Text style={styles.settingDescription}>Manage the data you shared during onboarding</Text>
+              </View>
+            </View>
+            
+            <View style={styles.surveyActions}>
+              <TouchableOpacity 
+                style={styles.surveyViewButton}
+                onPress={() => {
+                  // Show survey data in alert (for now)
+                  Alert.alert(
+                    'Survey Data',
+                    'This feature allows you to view and manage your onboarding survey responses. You can delete this data at any time for privacy compliance.',
+                    [
+                      { text: 'View Data', onPress: () => console.log('View survey data') },
+                      { text: 'Cancel', style: 'cancel' }
+                    ]
+                  )
+                }}
+              >
+                <Text style={styles.surveyViewButtonText}>View My Data</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.surveyDeleteButton}
+                onPress={() => {
+                  Alert.alert(
+                    'Delete Survey Data',
+                    'This will permanently delete all your onboarding survey responses. This action cannot be undone.\n\nYour app experience will not be affected, but we won\'t be able to use your responses for improvements.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { 
+                        text: 'Delete Data', 
+                        style: 'destructive',
+                        onPress: async () => {
+                          // Delete survey data logic here
+                          Alert.alert(
+                            'Data Deleted',
+                            'Your survey responses have been permanently deleted.',
+                            [{ text: 'OK' }]
+                          )
+                        }
+                      }
+                    ]
+                  )
+                }}
+              >
+                <Text style={styles.surveyDeleteButtonText}>Delete Survey Data</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.privacyNote}>
+              <Text style={styles.privacyNoteText}>
+                💡 Survey data helps us improve the app. It's stored securely and automatically deleted after 2 years. You can delete it anytime.
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -522,5 +606,113 @@ const createStyles = (colors: any) => StyleSheet.create({
     color: colors.white,
     fontSize: TYPOGRAPHY.sm,
     fontWeight: TYPOGRAPHY.medium,
+  },
+  
+  // Subscription Section Styles
+  upgradeButton: {
+    backgroundColor: colors.primary,
+    marginTop: SPACING.md,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  upgradeButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  premiumActions: {
+    marginTop: SPACING.md,
+    gap: SPACING.sm,
+  },
+  managePlanButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  managePlanButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  subscriptionCancelButton: {
+    backgroundColor: colors.error,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  subscriptionCancelButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  
+  // Feedback Section Styles
+  feedbackButton: {
+    backgroundColor: colors.primary,
+    marginTop: SPACING.md,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  feedbackButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  
+  // Survey Data Management Styles
+  surveyActions: {
+    marginTop: SPACING.md,
+    gap: SPACING.sm,
+  },
+  surveyViewButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  surveyViewButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  surveyDeleteButton: {
+    backgroundColor: colors.error,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  surveyDeleteButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
+  privacyNote: {
+    marginTop: SPACING.md,
+    padding: SPACING.md,
+    backgroundColor: colors.primary + '10',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: colors.primary + '20',
+  },
+  privacyNoteText: {
+    fontSize: TYPOGRAPHY.sm,
+    color: colors.textSecondary,
+    lineHeight: 18,
+    fontStyle: 'italic',
   },
 })

@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Link } from 'expo-router'
+import { Link, useRouter } from 'expo-router'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
@@ -23,6 +23,7 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false)
   const { signIn, signInWithApple } = useAuth()
   const { colors } = useTheme()
+  const router = useRouter()
   const styles = createStyles(colors)
 
   const handleSignIn = async () => {
@@ -49,6 +50,7 @@ export default function SignInScreen() {
       Alert.alert('Sign In Failed', error.message || 'An error occurred')
     }
   }
+
 
   return (
     <SafeAreaView style={styles.container}>
@@ -140,6 +142,7 @@ export default function SignInScreen() {
               </TouchableOpacity>
             </Link>
           </View>
+
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

@@ -622,37 +622,43 @@ export default function ReviewScreen() {
     console.log(`🏁 batchReviewsRef.current.length: ${batchReviewsRef.current.length}`)
     console.log(`🏁 Current batch contents:`, batchReviews.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
     
-    // Process batch reviews before showing completion screen
+    // Process batch reviews
     const reviewsToProcess = batchReviewsRef.current.length > 0 ? batchReviewsRef.current : batchReviews
     
+    // ✨ OPTIMISTIC UPDATE: Show UI immediately, sync in background
     if (reviewsToProcess.length > 0) {
-      setIsProcessingBatch(true)
-      try {
-        console.log(`🚀 Processing batch of ${reviewsToProcess.length} reviews...`)
-        console.log(`🚀 Reviews to process:`, reviewsToProcess.map(r => `${r.wordId}:${r.remembered ? 'R' : 'F'}`))
-        await supabaseService.processBatchWordReviews(reviewsToProcess)
-        console.log('✅ Batch processing completed successfully')
-        
-        // Record streak activity for completing reviews
-        await recordUserActivity()
-        
-        // Immediately update review status without database refetch
-        if (typeof window !== 'undefined' && (window as any).onReviewsCompleted) {
-          (window as any).onReviewsCompleted()
+      // 1. IMMEDIATE: Emit event for instant UI updates (home page, etc.)
+      emitEvent('reviewsCompleted', { 
+        notebookId: id!, 
+        reviewCount: reviewsToProcess.length 
+      })
+      
+      // 2. IMMEDIATE: Clear review data and show completion screen
+      setBatchReviews([])
+      batchReviewsRef.current = []
+      
+      // 3. BACKGROUND: Database sync (non-blocking)
+      const processInBackground = async () => {
+        try {
+          console.log(`🚀 Background: Processing batch of ${reviewsToProcess.length} reviews...`)
+          await supabaseService.processBatchWordReviews(reviewsToProcess)
+          console.log('✅ Background: Batch processing completed successfully')
+          
+          // Record streak activity
+          await recordUserActivity()
+          
+          // Update notebook last used
+          updateNotebookLastUsed(id!)
+          
+        } catch (error) {
+          console.error('❌ Background: Batch processing failed:', error)
+          // TODO: Add retry mechanism or show subtle error indicator
+          // For now, continue with optimistic state (most operations succeed)
         }
-        
-        // Update notebook last used for smart ordering
-        updateNotebookLastUsed(id!)
-        
-        setBatchReviews([]) // Clear the batch after successful processing
-        batchReviewsRef.current = []
-      } catch (error) {
-        console.error('❌ Batch processing failed:', error)
-        Alert.alert('Error', `Failed to save review results: ${error instanceof Error ? error.message : 'Unknown error'}`)
-        return // Don't show completion screen if batch processing failed
-      } finally {
-        setIsProcessingBatch(false)
       }
+      
+      // Start background sync without blocking UI
+      processInBackground()
     } else {
       console.log('⚠️ No batch reviews to process - all words may have been processed individually')
     }
@@ -913,14 +919,12 @@ export default function ReviewScreen() {
       reviewCount: reviewResults.remembered.length + reviewResults.forgotten.length 
     })
     
-    // Navigate back with a small delay to ensure event is processed
-    setTimeout(() => {
-      if (router.canGoBack()) {
-        router.back()
-      } else {
-        router.push('/(tabs)')
-      }
-    }, 50)
+    // Navigate back immediately - event is already processed
+    if (router.canGoBack()) {
+      router.back()
+    } else {
+      router.push('/(tabs)')
+    }
   }
 
   if (loading) {

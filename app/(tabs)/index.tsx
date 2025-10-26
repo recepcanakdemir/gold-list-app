@@ -1,34 +1,37 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useApp } from '@/lib/contexts/AppContext'
+import { useAuth } from '@/lib/contexts/AuthContext'
+import { useLocalNotebookState } from '@/lib/hooks/useLocalNotebookState'
+import { useLocalStreakState } from '@/lib/hooks/useLocalStreakState'
+import { useProgressManager } from '@/lib/hooks/useProgressManager'
+import { supabaseService } from '@/lib/services/supabaseService'
+import { supabase } from '@/lib/supabase/client'
+import { NotebookWithStats } from '@/lib/types/goldlist'
+import { useFocusEffect, useRouter } from 'expo-router'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  View,
+  AppState,
+  Dimensions,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Dimensions,
-  Alert,
-  AppState,
+  View
 } from 'react-native'
 import CountryFlag from 'react-native-country-flag'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter, useFocusEffect } from 'expo-router'
-import { useAuth } from '@/lib/contexts/AuthContext'
-import { useApp } from '@/lib/contexts/AppContext'
-import { supabaseService } from '@/lib/services/supabaseService'
-import { NotebookWithStats } from '@/lib/types/goldlist'
-import { supabase } from '@/lib/supabase/client'
 // Removed unused badge imports
-import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
-import { useTheme } from '@/lib/contexts/ThemeContext'
-import MaterialIcons from '@expo/vector-icons/MaterialIcons'
-import { useDevTime } from '@/lib/contexts/DevTimeContext'
-import { useSubscription } from '@/lib/contexts/SubscriptionContext'
-import { SharedHeader } from '@/components/shared-header'
 import { DevTimeDisplay } from '@/components/DevTimeDisplay'
 import { LoadingIndicator } from '@/components/LoadingIndicator'
-import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
+import { SharedHeader } from '@/components/shared-header'
+import { RADIUS, SHADOWS, SPACING, TYPOGRAPHY } from '@/lib/constants/design'
+import { useDevTime } from '@/lib/contexts/DevTimeContext'
+import { useSubscription } from '@/lib/contexts/SubscriptionContext'
+import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useRouteProtection } from '@/lib/hooks/useRouteProtection'
+import { isDeveloperAccount } from '@/lib/utils/devAccess'
+import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
+import MaterialIcons from '@expo/vector-icons/MaterialIcons'
 
 
 export default function HomeScreen() {
@@ -37,45 +40,84 @@ export default function HomeScreen() {
   const { appState, refreshNotebooks, updateNotebookLastUsed, addEventListener, emitEvent } = useApp()
   const { colors, isDark } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
-  const { subscription, showPaywallModal } = useSubscription()
+  const { subscription, showPaywallModal, getUserState, isLoading: subscriptionLoading } = useSubscription()
   const { protectedNavigateToAddWords } = useRouteProtection()
+  
+  // ✨ OPTIMISTIC UPDATES: Primary data source for instant UI updates
+  const {
+    state: progressState,
+    addWordsOptimistic: addWordsOptimisticPM,
+    addReviewsOptimistic: addReviewsOptimisticPM,
+    incrementStreakOptimistic,
+    hydrateFromDatabase: hydrateFromDatabaseHP,
+    syncNotebookProgress: syncNotebookProgressHP
+  } = useProgressManager()
+  
+  // ✨ LOCAL STATE: Keep existing as fallback
+  const {
+    addWordsOptimistic,
+    addReviewsOptimistic,
+    getPredictedButtonState,
+    clearAllUpdates
+  } = useLocalNotebookState()
+  
+  // ✨ STREAK STATE: For instant streak updates
+  const {
+    addActivityOptimistic,
+    getPredictedStreak,
+    clearStreakUpdates
+  } = useLocalStreakState()
   const [refreshing, setRefreshing] = useState(false)
   const screenWidth = Dimensions.get('window').width
   const [currentCarouselPage, setCurrentCarouselPage] = useState(0)
-  const [weekData, setWeekData] = useState([
-    { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Wed', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Thu', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Fri', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
-    { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
-  ])
-  // Throttling and loading guards - use refs to avoid dependency issues
-  const isLoadingProgressRef = useRef(false)
-  const lastProgressLoadTimeRef = useRef(0)
   
   // App state tracking for open app detection
   const appStateRef = useRef(AppState.currentState)
   
-  // Per-notebook progress tracking instead of global
-  const [notebookProgressMap, setNotebookProgressMap] = useState<Map<string, {
-    wordsAdded: number
-    goal: number
-    completed: boolean
-  }>>(new Map())
+  // ✨ OPTIMISTIC DATA: Use ProgressManager as primary source for notebook progress
+  const notebookProgressMap = useMemo(() => {
+    // Primary: ProgressManager optimistic data
+    if (progressState.notebookProgress.size > 0 || progressState.lastSyncTime > 0) {
+      return progressState.notebookProgress
+    }
+    // Fallback: Empty map
+    return new Map()
+  }, [progressState.notebookProgress, progressState.lastSyncTime])
   
-  // Legacy global progress - will be derived from individual notebooks
-  const [todayProgress, setTodayProgress] = useState({
-    wordsAdded: 0,
-    goal: 20,
-    completed: false
-  })
+  // ✨ OPTIMISTIC DATA: Derive today's progress from ProgressManager
+  const todayProgress = useMemo(() => {
+    // Primary: ProgressManager optimistic data
+    if (progressState.todayProgress.wordsAdded > 0 || progressState.lastSyncTime > 0) {
+      return progressState.todayProgress
+    }
+    // Fallback: Default data
+    return { wordsAdded: 0, goal: 20, completed: false }
+  }, [progressState.todayProgress, progressState.lastSyncTime])
   const insets = useSafeAreaInsets()
 
   useEffect(() => {
     refreshNotebooks()
   }, [])
+
+  // ✨ OPTIMISTIC UPDATES: Initialize ProgressManager for Homepage
+  useEffect(() => {
+    const initializeProgressManagerHP = async () => {
+      // Sync with existing ProgressManager instance (already started by Dashboard)
+      // Hydrate data if not already done
+      if (progressState.lastSyncTime === 0) {
+        await hydrateFromDatabaseHP()
+      }
+      
+      // Sync notebook progress if available
+      if (appState.notebooks.length > 0) {
+        await syncNotebookProgressHP(appState.notebooks)
+      }
+    }
+
+    if (profile?.id && appState.notebooks.length > 0) {
+      initializeProgressManagerHP()
+    }
+  }, [profile?.id, appState.notebooks, hydrateFromDatabaseHP, syncNotebookProgressHP, progressState.lastSyncTime])
 
   // Reset carousel page when notebooks change
   useEffect(() => {
@@ -91,30 +133,7 @@ export default function HomeScreen() {
     }
   }, [profile, updateButtonState]) // Only reload when profile changes
 
-  // Check if paywall should be shown on app launch
-  useEffect(() => {
-    if (profile && subscription) {
-      // Show paywall if user has never started trial and is not subscribed
-      const shouldShowPaywall = !subscription.isActive && 
-                                !subscription.isInTrial && 
-                                !subscription.trialStartedAt &&
-                                subscription.tier === 'free'
-      
-      if (shouldShowPaywall) {
-        // Small delay to ensure UI is ready
-        // Only show if not during state updates (prevents race conditions)
-        setTimeout(() => {
-          // Check if we're still in pre-trial state (avoid showing during transitions)
-          if (!subscription.isActive && !subscription.isInTrial && subscription.tier === 'free') {
-            console.log('📱 Index page: Showing paywall for pre-trial user')
-            showPaywallModal()
-          } else {
-            console.log('📱 Index page: Subscription state changed, skipping paywall')
-          }
-        }, 1000)
-      }
-    }
-  }, [profile, subscription, showPaywallModal])
+  // Note: Paywall navigation is handled by completion screen for new users
 
   // Better change detection: use notebook data fingerprint instead of just IDs
   const notebookFingerprint = useMemo(() => {
@@ -148,46 +167,26 @@ export default function HomeScreen() {
     }
     
     try {
-      const [weekly, today] = await Promise.all([
-        supabaseService.getWeeklyProgress(),
-        supabaseService.getTodayProgress()
-      ])
-      
-      setWeekData(weekly)
-      setTodayProgress(today)
-      
-      // Per-notebook progress now handled by event-driven system
-      // loadNotebookProgress is called through updateButtonState events
+      // ✨ OPTIMISTIC: Use ProgressManager for all progress data loading
+      await hydrateFromDatabaseHP()
     } catch (error) {
-      console.error('Error loading progress data:', error)
+      console.error('❌ Homepage: Error loading progress data:', error)
     }
   }
 
-  // Comprehensive refresh function for after actions (adding words, completing reviews)
+  // ✨ OPTIMISTIC: Comprehensive refresh function using ProgressManager
   const refreshHomeData = async () => {
     if (!profile) return
     
     try {
-      // Refresh all data sources
+      // Refresh all data sources via ProgressManager
       await Promise.all([
-        loadProgressData(), // Weekly progress and today's progress
-        loadNotebookProgress(appState.notebooks), // Per-notebook progress
+        loadProgressData(), // Uses ProgressManager hydration
+        loadNotebookProgress(appState.notebooks), // Uses ProgressManager sync
+        checkAllNotebookReviews() // Review availability
       ])
-      
-      // Update word stats
-      const [totalCount, masteredCount] = await Promise.all([
-        supabaseService.getTotalWordsCount(),
-        supabaseService.getMasteredWordsCount()
-      ])
-      setRealWordStats({
-        totalWords: totalCount,
-        masteredWords: masteredCount
-      })
-      
-      // Refresh review availability
-      await checkAllNotebookReviews()
     } catch (error) {
-      console.error('❌ Error refreshing home data:', error)
+      console.error('❌ Homepage: Error refreshing home data:', error)
     }
   }
 
@@ -196,7 +195,6 @@ export default function HomeScreen() {
     const handleAppStateChange = (nextAppState: string) => {
       // Only refresh when app comes from background to foreground
       if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-        if (__DEV__) console.log('📱 App opened from background, emitting app opened event')
         emitEvent('appOpened', {})
       }
       appStateRef.current = nextAppState
@@ -206,142 +204,47 @@ export default function HomeScreen() {
     return () => subscription?.remove()
   }, [])
 
-  // Load progress for each notebook independently - PARALLEL LOADING for performance
+  // ✨ OPTIMISTIC: Use ProgressManager for notebook progress loading
   const loadNotebookProgress = useCallback(async (notebooks?: NotebookWithStats[]) => {
-    // Use passed notebooks or current state, but don't depend on appState.notebooks in useCallback
     const notebooksToLoad = notebooks || appState.notebooks
     
     if (notebooksToLoad.length === 0) {
-      setNotebookProgressMap(new Map())
       return
     }
-
-    // THROTTLING: Prevent rapid successive calls
-    const now = Date.now()
-    const timeSinceLastLoad = now - lastProgressLoadTimeRef.current
-    const THROTTLE_MS = 1000 // Only allow one call per second
-    
-    if (isLoadingProgressRef.current) {
-      if (__DEV__) console.log('⏸️ Progress loading already in progress, skipping duplicate call')
-      return
-    }
-    
-    if (timeSinceLastLoad < THROTTLE_MS) {
-      if (__DEV__) console.log(`⏳ Progress loading throttled, last call was ${timeSinceLastLoad}ms ago`)
-      return
-    }
-
-    isLoadingProgressRef.current = true
-    lastProgressLoadTimeRef.current = now
     
     try {
-      // Reduce log spam - only show every 5th call or important calls
-      const shouldLog = timeSinceLastLoad > 5000 || notebooksToLoad.length !== 2
-      if (shouldLog && __DEV__) {
-        console.log(`🚀 Loading progress for ${notebooksToLoad.length} notebooks in parallel...`)
-      }
-      const startTime = Date.now()
-      
-      const progressMap = new Map<string, { wordsAdded: number; goal: number; completed: boolean }>()
-      
-      // PERFORMANCE FIX: Load all notebooks in parallel instead of serially
-      const progressPromises = notebooksToLoad.map(async (notebook) => {
-      try {
-        // Get today's page for this notebook
-        const todaysPage = await supabaseService.getTodaysPage(notebook.id)
-        
-        if (todaysPage) {
-          // Count words added to today's page
-          const wordsAddedToday = todaysPage.words?.length || 0
-          const goal = notebook.words_per_day || 20
-          const completed = wordsAddedToday >= goal
-          
-          return {
-            notebookId: notebook.id,
-            progress: { wordsAdded: wordsAddedToday, goal, completed }
-          }
-        } else {
-          // No page available today (shouldn't happen in normal usage)
-          return {
-            notebookId: notebook.id,
-            progress: { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
-          }
-        }
-      } catch (error) {
-        console.error(`Error loading progress for notebook ${notebook.id.slice(0, 8)}:`, error)
-        return {
-          notebookId: notebook.id,
-          progress: { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
-        }
-      }
-    })
-    
-    // Wait for all progress loads to complete
-    const results = await Promise.all(progressPromises)
-    
-    // Build the progress map from results, but preserve recent local updates
-    results.forEach(({ notebookId, progress }) => {
-      progressMap.set(notebookId, progress)
-    })
-    
-      const loadTime = Date.now() - startTime
-      if (shouldLog && __DEV__) {
-        console.log(`✅ Parallel progress loading completed in ${loadTime}ms for ${notebooksToLoad.length} notebooks`)
-      }
-      
-      // Simple database load - no complex protection needed with event-driven system
-      setNotebookProgressMap(progressMap)
+      // Use ProgressManager's syncNotebookProgress for instant updates
+      await syncNotebookProgressHP(notebooksToLoad)
     } catch (error) {
-      console.error('Error loading notebook progress:', error)
-    } finally {
-      isLoadingProgressRef.current = false // Always reset loading guard
+      console.error('❌ Homepage: Error syncing notebook progress:', error)
     }
-  }, [])
+  }, [syncNotebookProgressHP])
 
   // Immediate state update functions - no database refetching needed
   
-  // Single event-driven state manager for button state
+  // ✨ OPTIMISTIC: Event-driven state manager using ProgressManager
   const updateButtonState = useCallback((event: 'DAY_INIT' | 'WORDS_ADDED' | 'MANUAL_REFRESH' | 'DAY_ADVANCE', data?: any) => {
-    if (__DEV__) console.log(`🎯 Button State Event: ${event}`, data)
-    
     switch (event) {
       case 'DAY_INIT':
-        // Load initial state from database on app start or day change
+        // Load initial state via ProgressManager
         loadNotebookProgress(data?.notebooks || appState.notebooks)
         break;
         
       case 'WORDS_ADDED':
-        // Update local state immediately when words are added
-        const { notebookId, wordsAdded } = data
-        setNotebookProgressMap(prev => {
-          const newMap = new Map(prev)
-          const notebook = appState.notebooks.find(n => n.id === notebookId)
-          const goal = notebook?.words_per_day || 20
-          const currentProgress = newMap.get(notebookId) || { wordsAdded: 0, goal, completed: false }
-          const newWordsCount = currentProgress.wordsAdded + wordsAdded
-          const newProgress = {
-            wordsAdded: newWordsCount,
-            goal,
-            completed: newWordsCount >= goal
-          }
-          newMap.set(notebookId, newProgress)
-          if (__DEV__) console.log(`🎯 Local state updated: ${currentProgress.wordsAdded} → ${newWordsCount}/${goal}, completed: ${newProgress.completed}`)
-          return newMap
-        })
+        // ✨ OPTIMISTIC UPDATES: Already handled by ProgressManager in event handlers
         break;
         
       case 'MANUAL_REFRESH':
-        // Reload from database on manual refresh
+        // Reload from database via ProgressManager
         loadNotebookProgress(appState.notebooks)
         break;
         
       case 'DAY_ADVANCE':
-        // Reset state for new day
-        setNotebookProgressMap(new Map())
+        // ✨ ProgressManager handles day changes automatically
         loadNotebookProgress(appState.notebooks)
         break;
     }
-  }, [appState.notebooks])
+  }, [appState.notebooks, loadNotebookProgress])
   
   // Called directly when words are added to a notebook
   const onWordsAdded = useCallback((notebookId: string, wordsAdded: number) => {
@@ -357,10 +260,30 @@ export default function HomeScreen() {
   // Event listeners for data changes (replaces global function exposure)
   useEffect(() => {
     const handleWordsAdded = (data: { notebookId: string; wordCount: number }) => {
+      // ✨ PRIMARY: ProgressManager optimistic updates (0ms)
+      const notebook = appState.notebooks.find(n => n.id === data.notebookId)
+      const goal = notebook?.words_per_day || 20
+      addWordsOptimisticPM(data.notebookId, data.wordCount, goal)
+      incrementStreakOptimistic() // Predict streak increase
+      
+      // ✨ FALLBACK: Keep existing local state updates for compatibility
+      addWordsOptimistic(data.notebookId, data.wordCount)
+      addActivityOptimistic()
+      
+      // BACKGROUND: Update database state for accuracy
       onWordsAdded(data.notebookId, data.wordCount)
     }
 
-    const handleReviewsCompleted = () => {
+    const handleReviewsCompleted = (data: { notebookId: string; reviewCount: number }) => {
+      // ✨ PRIMARY: ProgressManager optimistic updates (0ms)
+      addReviewsOptimisticPM(data.notebookId, data.reviewCount || 1)
+      incrementStreakOptimistic() // Predict streak increase
+      
+      // ✨ FALLBACK: Keep existing local state updates for compatibility
+      addReviewsOptimistic(data.notebookId, data.reviewCount || 1)
+      addActivityOptimistic()
+      
+      // BACKGROUND: Update database state for accuracy
       onReviewsCompleted()
     }
 
@@ -372,10 +295,15 @@ export default function HomeScreen() {
       cleanupWords()
       cleanupReviews()
     }
-  }, [addEventListener, onWordsAdded, onReviewsCompleted])
+  }, [addEventListener, onWordsAdded, onReviewsCompleted, addWordsOptimistic, addReviewsOptimistic, addActivityOptimistic])
 
   const onRefresh = async () => {
     setRefreshing(true)
+    
+    // ✨ INSTANT: Clear local predictions when refreshing from database
+    clearAllUpdates()
+    clearStreakUpdates()
+    
     await Promise.all([
       refreshNotebooks(),
       loadProgressData(),
@@ -529,7 +457,6 @@ export default function HomeScreen() {
   // Only check on app launch when user is authenticated (once per user)
   useEffect(() => {
     const currentUserId = profile?.id
-    console.log('📋 Profile useEffect triggered, profile:', profile ? 'present' : 'null', 'already checked:', hasCheckedReviews, 'user changed:', lastCheckedUserId !== currentUserId)
     
     if (currentUserId && (lastCheckedUserId !== currentUserId || !hasCheckedReviews)) {
       checkReviewsOnce()
@@ -546,7 +473,6 @@ export default function HomeScreen() {
   // Register callback for day changes
   useEffect(() => {
     const unregister = registerDayChangeCallback(() => {
-      console.log('📅 Day changed - checking for reviews and resetting progress')
       checkReviewsOnce()
       // Reset all notebook progress for the new day
       updateButtonState('DAY_ADVANCE')
@@ -562,12 +488,10 @@ export default function HomeScreen() {
   // Event listeners for focus-based refresh (replaces window global checks)
   useEffect(() => {
     const handleDataChange = () => {
-      if (__DEV__) console.log('📱 Home refresh triggered by dataChanged event')
       refreshHomeData()
     }
 
     const handleAppOpened = () => {
-      if (__DEV__) console.log('📱 Home refresh triggered by appOpened event')
       refreshHomeData()
     }
 
@@ -584,18 +508,12 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       const now = Date.now()
-      const timeSinceLastFocus = now - lastFocusTime.current
       
       if (profile) {
         // Initial load
         if (!hasLoadedProgress) {
-          if (__DEV__) console.log('📱 Initial focus - loading progress')
           updateButtonState('DAY_INIT', { notebooks: appState.notebooks })
           setHasLoadedProgress(true)
-        }
-        // No automatic refresh on navigation - use event-driven updates only
-        else if (timeSinceLastFocus > 1000) {
-          if (__DEV__) console.log('📱 Returning to homepage - using existing local state (event-driven)')
         }
       }
       
@@ -625,44 +543,66 @@ export default function HomeScreen() {
       }
     }
     
-    // Get progress for THIS specific notebook
-    const notebookProgress = notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
-    
-    if (__DEV__) {
-      console.log(`🎯 Button state check for ${notebook.title}: ${notebookProgress.wordsAdded}/${notebookProgress.goal}, completed: ${notebookProgress.completed}`)
-    }
-    
-    // Check per-notebook review status
+    // ✨ FLICKER PREVENTION: Get predicted state using ProgressManager optimistic data
+    const dbProgress = notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
+    const dbHasReviews = notebookReviews.get(notebook.id)?.hasReviews || false
     const notebookReviewData = notebookReviews.get(notebook.id)
     
-    // Priority 1: Reviews available (per-notebook detection)
-    if (notebookReviewData?.hasReviews) {
+    // ✨ NEW: Use ProgressManager data directly to prevent flickering
+    const getProgressManagerButtonState = (notebook: NotebookWithStats, hasReviews: boolean) => {
+      const notebookProgress = progressState.notebookProgress.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
+      
+      // Reviews take priority
+      if (hasReviews) {
+        return { type: 'reviews', text: `Review Today's Words` }
+      }
+      
+      // Check if goal is reached
+      if (notebookProgress.completed || notebookProgress.wordsAdded >= notebookProgress.goal) {
+        return { type: 'complete', text: `You're All Done Today!` }
+      }
+      
+      // Still need words
+      const remaining = notebookProgress.goal - notebookProgress.wordsAdded
+      return { type: 'words', text: `Add Today's Words` }
+    }
+    
+    // Use ProgressManager data if available, fallback to local state for compatibility
+    const predictedButtonState = progressState.hasOptimisticUpdates || progressState.lastSyncTime > 0
+      ? getProgressManagerButtonState(notebook, dbHasReviews)
+      : getPredictedButtonState(notebook, dbProgress, dbHasReviews)
+    
+    if (__DEV__) {
+      console.log(`🎯 Button state prediction for ${notebook.title} (using ${progressState.hasOptimisticUpdates ? 'ProgressManager' : 'local state'}):`, predictedButtonState)
+    }
+    
+    // Priority 1: Reviews available (using predicted state)
+    if (predictedButtonState.type === 'reviews') {
       return { 
         type: 'review', 
-        text: 'Review Today\'s Words', 
-        route: `/notebook/${notebook.id}/review${notebookReviewData.pageNumber ? `?page=${notebookReviewData.pageNumber}` : ''}` 
+        text: predictedButtonState.text, 
+        route: `/notebook/${notebook.id}/review${notebookReviewData?.pageNumber ? `?page=${notebookReviewData.pageNumber}` : ''}` 
       }
     }
     
-    // Priority 2: Words to add today (check THIS notebook's completion status)
-    if (!notebookProgress.completed) {
+    // Priority 2: Words to add today (using predicted state)  
+    if (predictedButtonState.type === 'words') {
       // Calculate current page number based on THIS notebook's timeline
-      const notebookCreated = new Date(notebook.created_at)
-      const today = getCurrentDate()
       const daysSinceCreation = Math.floor(
         (today.getTime() - notebookCreated.getTime()) / (24 * 60 * 60 * 1000)
       ) + 1
       
       return { 
         type: 'add_words', 
-        text: 'Add Today\'s Words', 
+        text: predictedButtonState.text, 
         route: `/notebook/${notebook.id}?focusPage=${daysSinceCreation}&openBubble=true`
       }
     }
     
+    // Priority 3: All done for today (using predicted state)
     return { 
       type: 'done', 
-      text: 'You\'re All Done Today! 🎉', 
+      text: predictedButtonState.text, 
       route: null
     }
   }
@@ -888,7 +828,11 @@ export default function HomeScreen() {
 
     appState.notebooks.forEach(notebook => {
       const notebookReviewData = notebookReviews.get(notebook.id)
-      const notebookProgress = notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false }
+      
+      // ✨ FLICKER PREVENTION: Use ProgressManager data consistently
+      const notebookProgress = progressState.hasOptimisticUpdates || progressState.lastSyncTime > 0
+        ? (progressState.notebookProgress.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false })
+        : (notebookProgressMap.get(notebook.id) || { wordsAdded: 0, goal: notebook.words_per_day || 20, completed: false })
       
       if (notebookReviewData?.hasReviews) {
         reviewsNeeded++
@@ -928,8 +872,14 @@ export default function HomeScreen() {
     return [...notebooks].sort((a, b) => {
       const aReviews = notebookReviews.get(a.id)?.hasReviews || false
       const bReviews = notebookReviews.get(b.id)?.hasReviews || false
-      const aProgress = notebookProgressMap.get(a.id) || { wordsAdded: 0, goal: a.words_per_day || 20, completed: false }
-      const bProgress = notebookProgressMap.get(b.id) || { wordsAdded: 0, goal: b.words_per_day || 20, completed: false }
+      
+      // ✨ FLICKER PREVENTION: Use ProgressManager data consistently for sorting
+      const aProgress = progressState.hasOptimisticUpdates || progressState.lastSyncTime > 0
+        ? (progressState.notebookProgress.get(a.id) || { wordsAdded: 0, goal: a.words_per_day || 20, completed: false })
+        : (notebookProgressMap.get(a.id) || { wordsAdded: 0, goal: a.words_per_day || 20, completed: false })
+      const bProgress = progressState.hasOptimisticUpdates || progressState.lastSyncTime > 0
+        ? (progressState.notebookProgress.get(b.id) || { wordsAdded: 0, goal: b.words_per_day || 20, completed: false })
+        : (notebookProgressMap.get(b.id) || { wordsAdded: 0, goal: b.words_per_day || 20, completed: false })
 
       // Priority 1: Reviews needed (highest priority)
       if (aReviews && !bReviews) return -1
@@ -1160,42 +1110,42 @@ export default function HomeScreen() {
   }
 
 
-  // Get real user stats from database
-  const [realWordStats, setRealWordStats] = useState({
-    totalWords: 0,
-    masteredWords: 0
-  })
-
-  // Load real word counts from database
-  useEffect(() => {
-    const loadWordStats = async () => {
-      try {
-        const [totalCount, masteredCount] = await Promise.all([
-          supabaseService.getTotalWordsCount(),
-          supabaseService.getMasteredWordsCount()
-        ])
-        setRealWordStats({
-          totalWords: totalCount,
-          masteredWords: masteredCount
-        })
-      } catch (error) {
-        console.error('Error loading word stats:', error)
+  // ✨ OPTIMISTIC: Get real user stats from ProgressManager
+  const realWordStats = useMemo(() => {
+    // Primary: ProgressManager optimistic data
+    if (progressState.totalStats.totalAdded > 0 || progressState.lastSyncTime > 0) {
+      return {
+        totalWords: progressState.totalStats.totalAdded,
+        masteredWords: progressState.totalStats.totalMastered
       }
     }
     
-    if (profile) {
-      loadWordStats()
+    // Fallback: Default data
+    return {
+      totalWords: 0,
+      masteredWords: 0
     }
-  }, [profile, appState.notebooks]) // Reload when notebooks change
+  }, [progressState.totalStats, progressState.lastSyncTime])
 
 
   const getUserStats = () => {
-    const streakDays = profile?.streak_count || 0
-    const successRate = realWordStats.totalWords > 0 ? Math.round((realWordStats.masteredWords / realWordStats.totalWords) * 100) : 0
+    // ✨ OPTIMISTIC DATA: Use ProgressManager as primary source
+    const totalStats = progressState.totalStats.totalAdded > 0 || progressState.lastSyncTime > 0
+      ? progressState.totalStats
+      : realWordStats
+    
+    // ✨ INSTANT: Use ProgressManager streak for immediate UI feedback
+    const streakDays = progressState.streakCount > 0 || progressState.lastSyncTime > 0
+      ? progressState.streakCount
+      : getPredictedStreak(profile?.streak_count || 0)
+    
+    const successRate = totalStats.totalAdded > 0 
+      ? Math.round((totalStats.totalMastered / totalStats.totalAdded) * 100) 
+      : 0
     
     return {
-      totalWords: realWordStats.totalWords,
-      masteredWords: realWordStats.masteredWords,
+      totalWords: totalStats.totalAdded,
+      masteredWords: totalStats.totalMastered,
       streakDays,
       successRate,
       pendingReviews: hasReviewsToday ? 1 : 0
@@ -1253,43 +1203,6 @@ export default function HomeScreen() {
     )
   }
 
-  // Daily Progress Widget Component
-  const renderDailyProgressWidget = () => {
-    // Use real weekly data instead of dummy data
-    const dailyProgressData = weekData.map(day => ({
-      day: day.day,
-      added: day.wordsAdded, // Map from API format to widget format
-      completed: day.completed
-    }))
-
-    return (
-      <View style={styles.dailyProgressWidget}>
-        <Text style={styles.dailyProgressTitle}>This Week's Progress</Text>
-        <View style={styles.dailyProgressContainer}>
-          {dailyProgressData.map((day, index) => (
-            <View key={index} style={styles.dailyProgressItem}>
-              <Text style={styles.dailyProgressDay}>{day.day}</Text>
-              <View style={[
-                styles.dailyProgressIndicator,
-                { 
-                  backgroundColor: day.completed ? colors.primary : colors.gray200,
-                  borderWidth: 1,
-                  borderColor: colors.border
-                }
-              ]}>
-                <Text style={[
-                  styles.dailyProgressValue,
-                  { color: day.completed ? colors.cardBackground : colors.textSecondary }
-                ]}>
-                  {day.added}
-                </Text>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
-    )
-  }
 
   const styles = createStyles(colors, isDark)
 
@@ -1309,19 +1222,18 @@ export default function HomeScreen() {
         {/* Trial Countdown Banner */}
         {renderTrialCountdown()}
         
-        {/* Daily Progress Widget */}
-        {renderDailyProgressWidget()}
-        
-        {/* Development Reset Button */}
-        <TouchableOpacity 
-          style={styles.resetButton}
-          onPress={handleResetData}
-        >
-          <Text style={styles.resetButtonText}>🔄 Reset All Data (Dev Only)</Text>
-        </TouchableOpacity>
+        {/* Development Reset Button - Only for developer account */}
+        {isDeveloperAccount(profile?.email || '') && (
+          <TouchableOpacity 
+            style={styles.resetButton}
+            onPress={handleResetData}
+          >
+            <Text style={styles.resetButtonText}>🔄 Reset All Data (Dev Only)</Text>
+          </TouchableOpacity>
+        )}
 
-        {/* Development Time Simulation */}
-        <DevTimeDisplay />
+        {/* Development Time Simulation - Only for developer account */}
+        {isDeveloperAccount(profile?.email || '') && <DevTimeDisplay />}
 
         {/* Status Bar */}
         {renderStatusBar()}
@@ -2430,46 +2342,5 @@ const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
     color: colors.success,
   },
 
-  // Daily Progress Widget Styles
-  dailyProgressWidget: {
-    backgroundColor: colors.cardBackground,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
-    marginHorizontal: SPACING.lg,
-    marginBottom: SPACING.md,
-    ...SHADOWS.sm,
-  },
-  dailyProgressTitle: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.textPrimary,
-    marginBottom: SPACING.md,
-    textAlign: 'center',
-  },
-  dailyProgressContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  dailyProgressItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  dailyProgressDay: {
-    fontSize: TYPOGRAPHY.xs,
-    color: colors.textSecondary,
-    marginBottom: SPACING.xs,
-  },
-  dailyProgressIndicator: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  dailyProgressValue: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.bold,
-  },
 
 })

@@ -1,6 +1,8 @@
 import { supabaseService } from '@/lib/services/supabaseService'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { isDeveloperAccount } from '@/lib/utils/devAccess'
+import { useAuth } from './AuthContext'
 
 interface DevTimeContextType {
   isSimulationActive: boolean
@@ -13,19 +15,33 @@ interface DevTimeContextType {
   getSimulatedDaysElapsed: () => number
   registerDayChangeCallback: (callback: () => void) => () => void
   clearSimulationState: () => Promise<void>
+  isDeveloperMode: boolean
 }
 
 const DevTimeContext = createContext<DevTimeContextType | null>(null)
 
 export function DevTimeProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
   const [isSimulationActive, setIsSimulationActive] = useState(false)
   const [simulationStartTime, setSimulationStartTime] = useState(new Date())
   const [currentSimulatedDay, setCurrentSimulatedDay] = useState(0)
+  const [isDeveloperMode, setIsDeveloperMode] = useState(false)
 
   // Load simulation state on mount
   useEffect(() => {
     loadSimulationState()
   }, [])
+
+  // Check if current user is developer account
+  useEffect(() => {
+    if (user?.email) {
+      const isDev = isDeveloperAccount(user.email)
+      setIsDeveloperMode(isDev)
+      console.log(`🔧 DevTime: Developer mode ${isDev ? 'enabled' : 'disabled'} for ${user.email}`)
+    } else {
+      setIsDeveloperMode(false)
+    }
+  }, [user?.email])
 
   const loadSimulationState = async () => {
     try {
@@ -64,6 +80,11 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   }
 
   const startSimulation = () => {
+    if (!isDeveloperMode) {
+      console.warn('🔧 DevTime: Simulation not available for this account')
+      return
+    }
+    
     const now = new Date()
     setIsSimulationActive(true)
     setSimulationStartTime(now)
@@ -72,11 +93,21 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   }
 
   const stopSimulation = () => {
+    if (!isDeveloperMode) {
+      console.warn('🔧 DevTime: Simulation not available for this account')
+      return
+    }
+    
     setIsSimulationActive(false)
     saveSimulationState(false, simulationStartTime, currentSimulatedDay)
   }
 
   const clearSimulationState = async () => {
+    if (!isDeveloperMode) {
+      console.warn('🔧 DevTime: Simulation not available for this account')
+      return
+    }
+    
     try {
       await AsyncStorage.removeItem('devTimeSimulation')
       setIsSimulationActive(false)
@@ -98,6 +129,11 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const nextDay = async () => {
+    if (!isDeveloperMode) {
+      console.warn('🔧 DevTime: Simulation not available for this account')
+      return
+    }
+    
     const oldDay = currentSimulatedDay
     const newDay = currentSimulatedDay + 1
     setCurrentSimulatedDay(newDay)
@@ -121,16 +157,24 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
     // Validate daily streaks when simulation advances 
     try {
       console.log(`🔥 DevTime: Attempting daily streak validation for day ${newDay}`)
-      // Use a global window function to avoid circular dependency
-      if (typeof window !== 'undefined' && (window as any).validateDailyStreak) {
-        console.log(`🔥 DevTime: Global validateDailyStreak function found, calling it`)
-        await (window as any).validateDailyStreak(getCurrentDate())
-        console.log(`🔥 DevTime: Daily streak validation completed`)
+      console.log(`🔥 DevTime: Using simulated date: ${getCurrentDate().toISOString()}`)
+      
+      // Direct call to supabaseService for streak validation
+      // This validates that the user hasn't missed any days during DevTime advancement
+      const { data: { user } } = await supabaseService.supabase.auth.getUser()
+      if (user?.id) {
+        // Check if user has any activity today - if not, this might break their streak
+        const todayActivity = await supabaseService.hasActivityToday(user.id, getCurrentDate())
+        console.log(`🔥 DevTime: User ${user.id.slice(0, 8)} has activity today: ${todayActivity}`)
+        
+        // Update streak based on activity status
+        await supabaseService.updateStreak(user.id, todayActivity, getCurrentDate())
+        console.log(`🔥 DevTime: Streak validation completed for simulated date`)
       } else {
-        console.warn(`🔥 DevTime: Global validateDailyStreak function NOT found`)
+        console.warn(`🔥 DevTime: No authenticated user found for streak validation`)
       }
     } catch (error) {
-      console.warn('⚠️ Error during streak validation:', error)
+      console.warn('⚠️ Error during DevTime streak validation:', error)
     }
 
     // Notify registered callbacks about day change
@@ -144,6 +188,11 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   }
 
   const previousDay = async () => {
+    if (!isDeveloperMode) {
+      console.warn('🔧 DevTime: Simulation not available for this account')
+      return
+    }
+    
     const oldDay = currentSimulatedDay
     const newDay = Math.max(0, currentSimulatedDay - 1)
     setCurrentSimulatedDay(newDay)
@@ -158,9 +207,14 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
   }
 
   const getCurrentDate = (): Date => {
-    if (!isSimulationActive) {
+    // Non-developer accounts always get real time
+    if (!isDeveloperMode || !isSimulationActive) {
       const realDate = new Date()
-      console.log(`🕰️ DevTime: Using real date: ${realDate.toISOString()}`)
+      if (!isDeveloperMode) {
+        console.log(`🕰️ DevTime: Using real date (non-dev account): ${realDate.toISOString()}`)
+      } else {
+        console.log(`🕰️ DevTime: Using real date: ${realDate.toISOString()}`)
+      }
       return realDate
     }
     
@@ -191,7 +245,8 @@ export function DevTimeProvider({ children }: { children: React.ReactNode }) {
       previousDay,
       getSimulatedDaysElapsed,
       registerDayChangeCallback,
-      clearSimulationState
+      clearSimulationState,
+      isDeveloperMode
     }}>
       {children}
     </DevTimeContext.Provider>

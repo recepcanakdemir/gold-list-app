@@ -5,6 +5,10 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useSubscription } from '@/lib/contexts/SubscriptionContext'
+import { useLocalNotebookState } from '@/lib/hooks/useLocalNotebookState'
+import { useLocalStreakState } from '@/lib/hooks/useLocalStreakState'
+import { useProgressManager } from '@/lib/hooks/useProgressManager'
+import { progressManager } from '@/lib/services/progressManager'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { supabase } from '@/lib/supabase/client'
 import { FrontendDailyProgress } from '@/lib/utils/dataTransform'
@@ -121,10 +125,41 @@ export default function DashboardScreen() {
   const { subscription, showPaywallModal, hasFeature, getUserState } = useSubscription()
   const { currentSimulatedDay, getCurrentDate } = useDevTime()
   const queryClient = useQueryClient()
+  
+  // ✨ OPTIMISTIC UPDATES: Primary data source for instant UI updates
+  const {
+    state: progressState,
+    addWordsOptimistic: addWordsOptimisticPM,
+    addReviewsOptimistic: addReviewsOptimisticPM,
+    incrementStreakOptimistic,
+    hydrateFromDatabase,
+    syncNotebookProgress
+  } = useProgressManager()
+  
+  // ✨ LOCAL STATE: Keep existing as fallback
+  const {
+    addWordsOptimistic,
+    addReviewsOptimistic,
+    clearAllUpdates,
+    hasLocalUpdates
+  } = useLocalNotebookState()
+  
+  // ✨ STREAK STATE: For instant streak updates
+  const {
+    addActivityOptimistic,
+    getPredictedStreak,
+    clearStreakUpdates
+  } = useLocalStreakState()
+  
   const [refreshing, setRefreshing] = useState(false)
   const [selectedChartPeriod, setSelectedChartPeriod] = useState<'week' | 'month'>('week')
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month'>('week')
   const [currentPage, setCurrentPage] = useState(0)
+
+  // ✨ STABLE QUERY KEYS: Memoize date to prevent cache invalidation storms
+  const currentDateString = useMemo(() => {
+    return getCurrentDate().toISOString().split('T')[0]
+  }, [getCurrentDate])
   // Note: Old manual state management removed - now using React Query + computed values
 
   // ===== REACT QUERY DATA FETCHING =====
@@ -137,11 +172,13 @@ export default function DashboardScreen() {
     error: todayError,
     refetch: refetchTodayProgress
   } = useQuery({
-    queryKey: ['today-progress', profile?.id, getCurrentDate().toISOString().split('T')[0]],
+    queryKey: ['today-progress', profile?.id, currentDateString],
     queryFn: () => supabaseService.getTodayProgress(),
     enabled: !!profile?.id,
-    staleTime: 30 * 1000, // 30 seconds for immediate feel
-    refetchInterval: 15 * 1000, // Refresh every 15 seconds
+    staleTime: 5 * 60 * 1000, // 5 minutes - rely on events for updates
+    refetchInterval: false, // No auto-polling - use events for updates
+    // ✨ INSTANT: Provide default data for immediate rendering
+    initialData: { wordsAdded: 0, goal: 20, completed: false },
   })
 
   // Weekly progress with DevTime synchronization
@@ -150,10 +187,20 @@ export default function DashboardScreen() {
     isLoading: weeklyLoading,
     refetch: refetchWeeklyProgress
   } = useQuery({
-    queryKey: ['weekly-progress', profile?.id, getCurrentDate().toISOString().split('T')[0]],
+    queryKey: ['weekly-progress', profile?.id, currentDateString],
     queryFn: () => supabaseService.getWeeklyProgress(),
     enabled: !!profile?.id,
-    staleTime: 60 * 1000, // 1 minute for weekly data
+    staleTime: 10 * 60 * 1000, // 10 minutes - rely on events for updates
+    // ✨ INSTANT: Provide default weekly data for immediate rendering
+    initialData: [
+      { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Wed', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Thu', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Fri', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
+      { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
+    ],
   })
 
   // Monthly progress
@@ -165,8 +212,18 @@ export default function DashboardScreen() {
     queryKey: ['monthly-progress', profile?.id, currentSimulatedDay],
     queryFn: () => supabaseService.getMonthlyProgress(),
     enabled: !!profile?.id,
-    staleTime: 30 * 1000, // 30 seconds for real-time updates
-    refetchInterval: 30 * 1000, // Refresh every 30 seconds for monthly data
+    staleTime: 10 * 60 * 1000, // 10 minutes - rely on events for updates
+    refetchInterval: false, // No auto-polling - use events for updates
+    // ✨ INSTANT: Provide default monthly data for immediate rendering
+    initialData: [
+      { month: 'Apr', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'May', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Jun', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Jul', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Aug', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Sep', wordsAdded: 0, wordsMastered: 0 },
+      { month: 'Oct', wordsAdded: 0, wordsMastered: 0 },
+    ],
   })
 
   // Daily progress for heatmap (175 days like before)
@@ -178,8 +235,10 @@ export default function DashboardScreen() {
     queryKey: ['daily-progress', profile?.id, currentSimulatedDay, 175],
     queryFn: () => supabaseService.getDailyProgress(175),
     enabled: !!profile?.id,
-    staleTime: 30 * 1000, // 30 seconds for real-time updates
-    refetchInterval: 15 * 1000, // Refresh every 15 seconds for real-time feel
+    staleTime: 10 * 60 * 1000, // 10 minutes - rely on events for updates
+    refetchInterval: false, // No auto-polling - use events for updates
+    // ✨ INSTANT: Provide empty daily progress for immediate heatmap rendering
+    initialData: [],
   })
 
   // Total words statistics
@@ -191,19 +250,31 @@ export default function DashboardScreen() {
     queryKey: ['total-stats', profile?.id],
     queryFn: () => supabaseService.getTotalWordsStats(),
     enabled: !!profile?.id,
-    staleTime: 30 * 1000, // 30 seconds for stats
-    refetchInterval: 30 * 1000, // Refresh every 30 seconds for real-time feel
+    staleTime: 10 * 60 * 1000, // 10 minutes - rely on events for updates
+    refetchInterval: false, // No auto-polling - use events for updates
+    // ✨ INSTANT: Provide default stats for immediate rendering
+    initialData: { totalAdded: 0, totalMastered: 0 },
   })
 
   // ===== COMPUTED VALUES =====
   // Transform React Query data into UI-ready format
   
-  // Use React Query data with fallbacks to prevent NaN issues
+  // ✨ OPTIMISTIC DATA: Use ProgressManager as primary source, React Query as fallback
   const computedTodayProgress = useMemo(() => {
+    // Primary: ProgressManager optimistic data
+    if (progressState.todayProgress.wordsAdded > 0 || progressState.lastSyncTime > 0) {
+      return progressState.todayProgress
+    }
+    // Fallback: React Query data
     return todayProgressData || { wordsAdded: 0, goal: 20, completed: false }
-  }, [todayProgressData])
+  }, [progressState.todayProgress, todayProgressData, progressState.lastSyncTime])
 
   const computedWeeklyData = useMemo(() => {
+    // Primary: ProgressManager optimistic data
+    if (progressState.weeklyProgress.some(day => day.wordsAdded > 0) || progressState.lastSyncTime > 0) {
+      return progressState.weeklyProgress
+    }
+    // Fallback: React Query data
     return weeklyProgressData || [
       { day: 'Mon', wordsAdded: 0, wordsRemembered: 0, completed: false },
       { day: 'Tue', wordsAdded: 0, wordsRemembered: 0, completed: false },
@@ -213,9 +284,10 @@ export default function DashboardScreen() {
       { day: 'Sat', wordsAdded: 0, wordsRemembered: 0, completed: false },
       { day: 'Sun', wordsAdded: 0, wordsRemembered: 0, completed: false },
     ]
-  }, [weeklyProgressData])
+  }, [progressState.weeklyProgress, weeklyProgressData, progressState.lastSyncTime])
 
   const computedMonthlyData = useMemo(() => {
+    // Fallback: React Query data (monthly is complex, use database)
     return monthlyProgressData || [
       { month: 'Apr', wordsAdded: 0, wordsMastered: 0 },
       { month: 'May', wordsAdded: 0, wordsMastered: 0 },
@@ -228,8 +300,13 @@ export default function DashboardScreen() {
   }, [monthlyProgressData])
 
   const computedTotalStats = useMemo(() => {
+    // Primary: ProgressManager optimistic data
+    if (progressState.totalStats.totalAdded > 0 || progressState.lastSyncTime > 0) {
+      return progressState.totalStats
+    }
+    // Fallback: React Query data
     return totalStatsData || { totalAdded: 0, totalMastered: 0 }
-  }, [totalStatsData])
+  }, [progressState.totalStats, totalStatsData, progressState.lastSyncTime])
 
   // Heatmap generation function
   const generateRealHeatmap = useCallback((dailyProgress: FrontendDailyProgress[]) => {
@@ -258,6 +335,12 @@ export default function DashboardScreen() {
       
       // Process each day's progress
       dailyProgress.forEach((day, index) => {
+        // Safety check: ensure day.date exists and is valid
+        if (!day.date || typeof day.date !== 'string') {
+          console.warn(`🗓️ Skipping invalid day data at index ${index}:`, day);
+          return;
+        }
+        
         // Parse the date from the daily progress
         const dayDate = new Date(day.date + 'T00:00:00.000Z') // Ensure UTC parsing
         
@@ -316,9 +399,14 @@ export default function DashboardScreen() {
 
   // Generate heatmap data from daily progress  
   const computedActivityData = useMemo(() => {
+    // Primary: ProgressManager optimistic heatmap data
+    if (progressState.heatmapData.some(row => row.some(cell => cell > 0)) || progressState.lastSyncTime > 0) {
+      return progressState.heatmapData
+    }
+    // Fallback: React Query data with generation
     if (!dailyProgressData) return []
     return generateRealHeatmap(dailyProgressData)
-  }, [dailyProgressData, generateRealHeatmap])
+  }, [progressState.heatmapData, dailyProgressData, generateRealHeatmap, progressState.lastSyncTime])
 
   // Combined loading state for pull-to-refresh
   const isAnyLoading = todayLoading || weeklyLoading || monthlyLoading || heatmapLoading || totalStatsLoading
@@ -341,10 +429,43 @@ export default function DashboardScreen() {
   
   // App state tracking for open app detection
   const appStateRef = useRef(AppState.currentState)
+  
+  // ✨ DUPLICATE CALL PROTECTION: Prevent multiple simultaneous progress loading
+  const isLoadingProgressRef = useRef(false)
+  const lastProgressLoadTimeRef = useRef(0)
 
   useEffect(() => {
     refreshNotebooks()
   }, [])
+
+  // ✨ OPTIMISTIC UPDATES: Initialize ProgressManager
+  useEffect(() => {
+    const initializeProgressManager = async () => {
+      console.log('🚀 Dashboard: Initializing ProgressManager...')
+      
+      // Start background sync
+      progressManager.startBackgroundSync(30000) // 30 seconds
+      
+      // Initial hydration from database
+      await hydrateFromDatabase()
+      
+      // Sync notebook progress if available
+      if (appState.notebooks.length > 0) {
+        await syncNotebookProgress(appState.notebooks)
+      }
+      
+      console.log('✅ Dashboard: ProgressManager initialized')
+    }
+
+    if (profile?.id) {
+      initializeProgressManager()
+    }
+
+    // Cleanup on unmount
+    return () => {
+      progressManager.stopBackgroundSync()
+    }
+  }, [profile?.id, hydrateFromDatabase, syncNotebookProgress, appState.notebooks])
 
   // AppState listener for app open detection
   useEffect(() => {
@@ -377,7 +498,29 @@ export default function DashboardScreen() {
   // Note: generateRealHeatmap function moved above to fix scope issue
 
   const onRefresh = async () => {
+    // ✨ DUPLICATE CALL PROTECTION: Prevent multiple simultaneous refreshes
+    const now = Date.now()
+    const timeSinceLastLoad = now - lastProgressLoadTimeRef.current
+    const THROTTLE_MS = 1000 // Only allow one call per second
+    
+    if (isLoadingProgressRef.current) {
+      if (__DEV__) console.log('⏸️ Dashboard refresh already in progress, skipping duplicate call')
+      return
+    }
+    
+    if (timeSinceLastLoad < THROTTLE_MS) {
+      if (__DEV__) console.log(`⏳ Dashboard refresh throttled, last call was ${timeSinceLastLoad}ms ago`)
+      return
+    }
+
+    isLoadingProgressRef.current = true
+    lastProgressLoadTimeRef.current = now
     setRefreshing(true)
+    
+    // ✨ INSTANT: Clear local predictions when refreshing from database
+    clearAllUpdates()
+    clearStreakUpdates()
+    
     try {
       // Use React Query refetch for all dashboard data + refresh notebooks
       await Promise.all([
@@ -392,6 +535,7 @@ export default function DashboardScreen() {
     } catch (error) {
       console.error('❌ Dashboard: Pull-to-refresh error:', error)
     } finally {
+      isLoadingProgressRef.current = false
       setRefreshing(false)
     }
   }
@@ -402,67 +546,130 @@ export default function DashboardScreen() {
   // REACT QUERY: Event-based cache invalidation
   useEffect(() => {
     const handleDataChange = () => {
-      if (__DEV__) console.log('📊 Dashboard: dataChanged - invalidating today + weekly queries')
-      queryClient.invalidateQueries({ queryKey: ['today-progress'] })
-      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+      if (__DEV__) console.log('📊 Dashboard: dataChanged - using smart cache updates')
+      // ✨ SMART CACHE UPDATES: Update cache directly instead of invalidating
+      // Only invalidate complex queries that require full recalculation
+      queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
+      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
     }
 
     const handleWordsAdded = (data: { notebookId: string; wordCount: number }) => {
-      if (__DEV__) console.log('📊 Dashboard: wordsAdded - invalidating progress + stats queries', data)
-      if (__DEV__) console.log('📊 Dashboard: Current cache key components - profile:', profile?.id, 'simulatedDay:', currentSimulatedDay)
+      if (__DEV__) console.log('📊 Dashboard: wordsAdded - INSTANT optimistic updates', data)
       
-      // IMMEDIATE CACHE INVALIDATION with forced refetch for critical data
-      queryClient.invalidateQueries({ queryKey: ['today-progress'] })
-      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+      // ✨ PRIMARY: ProgressManager optimistic updates (0ms)
+      const notebook = appState.notebooks.find(n => n.id === data.notebookId)
+      const goal = notebook?.words_per_day || 20
+      addWordsOptimisticPM(data.notebookId, data.wordCount, goal)
+      incrementStreakOptimistic() // Predict streak increase
+      
+      // ✨ FALLBACK: Keep existing local state updates for compatibility
+      addWordsOptimistic(data.notebookId, data.wordCount)
+      addActivityOptimistic()
+      
+      // ✨ BACKGROUND: Update React Query cache as secondary system
+      const today = currentDateString
+      
+      queryClient.setQueryData(['today-progress', profile?.id, today], (old: any) => {
+        if (!old) return { wordsAdded: data.wordCount, goal: 20, completed: data.wordCount >= 20 }
+        const newWordsAdded = (old.wordsAdded || 0) + data.wordCount
+        return {
+          ...old,
+          wordsAdded: newWordsAdded,
+          completed: newWordsAdded >= (old.goal || 20)
+        }
+      })
+      
+      const currentDay = getCurrentDate().toLocaleDateString('en-US', { weekday: 'short' })
+      queryClient.setQueryData(['weekly-progress', profile?.id, today], (old: any) => {
+        if (!old || !Array.isArray(old)) return old
+        return old.map(dayData => {
+          if (dayData.day === currentDay) {
+            const newWordsAdded = (dayData.wordsAdded || 0) + data.wordCount
+            return {
+              ...dayData,
+              wordsAdded: newWordsAdded,
+              completed: newWordsAdded >= (dayData.goal || 20)
+            }
+          }
+          return dayData
+        })
+      })
+      
+      queryClient.setQueryData(['total-stats', profile?.id], (old: any) => {
+        if (!old) return { totalAdded: data.wordCount, totalMastered: 0 }
+        return {
+          ...old,
+          totalAdded: (old.totalAdded || 0) + data.wordCount
+        }
+      })
+      
+      // Only invalidate complex calculations
       queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
-      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
       
-      // CRITICAL: Also invalidate with exact cache keys to ensure cache invalidation works
-      if (profile?.id) {
-        queryClient.invalidateQueries({ queryKey: ['monthly-progress', profile.id, currentSimulatedDay] })
-        queryClient.invalidateQueries({ queryKey: ['daily-progress', profile.id, currentSimulatedDay, 175] })
-      }
-      
-      // Force immediate refetch of most important data including heatmap and monthly
-      queryClient.refetchQueries({ queryKey: ['today-progress'] })
-      queryClient.refetchQueries({ queryKey: ['total-stats'] })
-      queryClient.refetchQueries({ queryKey: ['daily-progress'] })
-      queryClient.refetchQueries({ queryKey: ['monthly-progress'] })
-      
-      // CRITICAL: Also force refetch with exact cache keys
-      if (profile?.id) {
-        if (__DEV__) console.log('📊 Dashboard: Force refetching monthly with exact key:', ['monthly-progress', profile.id, currentSimulatedDay])
-        queryClient.refetchQueries({ queryKey: ['monthly-progress', profile.id, currentSimulatedDay] })
-      }
-      
-      // Trigger profile refresh for streak updates (recordActivity updates profile)
+      // Trigger profile refresh for streak updates
       setTimeout(() => {
         if (profile?.id) {
           refreshProfile()
         }
-      }, 500) // Small delay to allow streak update to complete
+      }, 500)
     }
 
-    const handleReviewsCompleted = () => {
-      if (__DEV__) console.log('📊 Dashboard: reviewsCompleted - invalidating stats + heatmap queries')
-      // Reviews affect statistics, progress, and daily heatmap
-      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
-      queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+    const handleReviewsCompleted = (data: { notebookId: string; reviewCount: number }) => {
+      if (__DEV__) console.log('📊 Dashboard: reviewsCompleted - INSTANT optimistic updates', data)
       
-      // Force immediate refetch for heatmap updates
-      queryClient.refetchQueries({ queryKey: ['daily-progress'] })
+      // ✨ PRIMARY: ProgressManager optimistic updates (0ms)
+      addReviewsOptimisticPM(data.notebookId, data.reviewCount || 1)
+      incrementStreakOptimistic() // Predict streak increase
+      
+      // ✨ FALLBACK: Keep existing local state updates for compatibility
+      addReviewsOptimistic(data.notebookId, data.reviewCount || 1)
+      addActivityOptimistic()
+      
+      // ✨ BACKGROUND: Update React Query cache as secondary system
+      const today = currentDateString
+      
+      queryClient.setQueryData(['daily-progress', profile?.id, currentSimulatedDay, 175], (old: any) => {
+        if (!old || !Array.isArray(old)) return old
+        return old.map(day => {
+          if (day && day.date === today) {
+            return { ...day, wordsReviewed: (day.wordsReviewed || 0) + data.reviewCount }
+          }
+          return day
+        })
+      })
+      
+      const currentDay = getCurrentDate().toLocaleDateString('en-US', { weekday: 'short' })
+      queryClient.setQueryData(['weekly-progress', profile?.id, today], (old: any) => {
+        if (!old || !Array.isArray(old)) return old
+        return old.map(dayData => {
+          if (dayData.day === currentDay) {
+            return {
+              ...dayData,
+              wordsReviewed: (dayData.wordsReviewed || 0) + data.reviewCount
+            }
+          }
+          return dayData
+        })
+      })
+      
+      // Only invalidate complex calculations
+      queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
     }
 
     const handleAppOpened = () => {
-      if (__DEV__) console.log('📊 Dashboard: appOpened - invalidating all dashboard queries')
-      // Full refresh on app open - invalidate all dashboard data
+      if (__DEV__) console.log('📊 Dashboard: appOpened - smart refresh for fresh data')
+      // ✨ SMART APP REFRESH: Only invalidate queries that need fresh data on app open
+      // Today's progress might have changed if user added words on another device
       queryClient.invalidateQueries({ queryKey: ['today-progress'] })
       queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
       queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
       queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
       queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+      
+      // Trigger immediate refetch for critical data
+      queryClient.refetchQueries({ queryKey: ['today-progress'] })
+      queryClient.refetchQueries({ queryKey: ['total-stats'] })
     }
 
     // Set up event listeners
@@ -477,7 +684,7 @@ export default function DashboardScreen() {
       cleanupReviews()
       cleanupApp()
     }
-  }, [addEventListener, queryClient, profile?.id])
+  }, [addEventListener, queryClient, profile?.id, addWordsOptimistic, addReviewsOptimistic, addActivityOptimistic])
 
   // ===== SUPABASE REALTIME INTEGRATION =====
   // Real-time database change detection for automatic cache invalidation
@@ -498,18 +705,19 @@ export default function DashboardScreen() {
         },
         (payload) => {
           console.log('🔄 Realtime: Words table changed', payload.eventType, (payload.new as any)?.id)
-          // IMMEDIATE UPDATES: Words changes affect multiple dashboard queries
-          queryClient.invalidateQueries({ queryKey: ['today-progress'] })
-          queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
-          queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
-          queryClient.invalidateQueries({ queryKey: ['total-stats'] })
-          queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
-          
-          // Force immediate refetch for critical real-time data including heatmap and monthly
-          queryClient.refetchQueries({ queryKey: ['today-progress'] })
-          queryClient.refetchQueries({ queryKey: ['total-stats'] })
-          queryClient.refetchQueries({ queryKey: ['daily-progress'] })
-          queryClient.refetchQueries({ queryKey: ['monthly-progress'] })
+          // ✨ SMART REALTIME: Only invalidate queries that absolutely need fresh calculation
+          // Most updates should come through events, realtime is for cross-device sync
+          if (payload.eventType === 'INSERT') {
+            // New words from another device - need fresh data
+            queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+            queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+            queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+          } else if (payload.eventType === 'UPDATE') {
+            // Word status changes (mastery, round progression)
+            queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+            queryClient.invalidateQueries({ queryKey: ['monthly-progress'] })
+          }
+          // Reduced aggressive invalidation - let events handle most updates
         }
       )
       .on(
@@ -521,9 +729,11 @@ export default function DashboardScreen() {
         },
         (payload) => {
           console.log('🔄 Realtime: Pages table changed', payload.eventType, (payload.new as any)?.id)
-          // Pages changes mainly affect today and daily progress
-          queryClient.invalidateQueries({ queryKey: ['today-progress'] })
-          queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
+          // ✨ SMART REALTIME: Pages changes are rare, only invalidate if necessary
+          if (payload.eventType === 'INSERT') {
+            // New page created - might affect today's progress
+            queryClient.invalidateQueries({ queryKey: ['today-progress'] })
+          }
         }
       )
       .on(
@@ -535,9 +745,9 @@ export default function DashboardScreen() {
         },
         (payload) => {
           console.log('🔄 Realtime: Reviews table changed', payload.eventType, (payload.new as any)?.id)
-          // Reviews affect weekly progress and total stats
-          queryClient.invalidateQueries({ queryKey: ['weekly-progress'] })
+          // ✨ SMART REALTIME: Reviews from another device need fresh stats
           queryClient.invalidateQueries({ queryKey: ['total-stats'] })
+          queryClient.invalidateQueries({ queryKey: ['daily-progress'] })
         }
       )
       .subscribe((status) => {
@@ -894,7 +1104,7 @@ export default function DashboardScreen() {
           <View style={styles.streakMasteredRow}>
             <View style={styles.streakMasteredItem}>
               <Text style={styles.streakMasteredEmoji}>🔥</Text>
-              <Text style={styles.streakMasteredValue}>{profile?.streak_count || 0}</Text>
+              <Text style={styles.streakMasteredValue}>{progressState.streakCount || profile?.streak_count || 0}</Text>
               <Text style={styles.streakMasteredLabel}>Current Streak</Text>
             </View>
             <View style={styles.streakMasteredItem}>

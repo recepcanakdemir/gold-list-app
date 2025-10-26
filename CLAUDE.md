@@ -64,7 +64,7 @@ app/
 └── _layout.tsx           # Root layout with context providers
 ```
 
-**Note**: The onboarding screens mentioned in the original documentation are NOT yet implemented. The app currently goes directly from authentication to the main dashboard.
+**Note**: The app follows a simple authentication flow - users authenticate and then proceed directly to the main dashboard. No onboarding screens are implemented.
 
 ### Database Schema (Supabase PostgreSQL)
 
@@ -109,7 +109,7 @@ Additional Tables:
 ### Key Architecture Patterns
 
 #### State Management
-- **Hierarchical Context Providers**: DevTime → Theme → Auth → App
+- **Hierarchical Context Providers**: DevTime → Theme → Auth → Subscription → App
 - **React Context**: Preferred over Redux for app complexity level  
 - **AsyncStorage**: Settings persistence and offline caching
 - **Supabase Real-time**: Live data synchronization
@@ -146,9 +146,10 @@ const { getCurrentDate, nextDay, previousDay, isSimulationActive } = useDevTime(
 
 #### Navigation Architecture  
 - **Expo Router**: File-based routing with typed routes
-- **AuthGuard**: Route protection based on authentication and onboarding status
+- **AuthGuard**: Route protection based on authentication status only
 - **Modal Presentations**: Input and review screens use modal/fullScreenModal
 - **Deep Linking**: Auto-focus navigation (e.g., "Add Today's Words")
+- **Simple Flow**: Auth → Main App (no onboarding)
 
 ### Key Technologies & Configuration
 
@@ -231,6 +232,9 @@ lib/contexts/
 ├── DevTimeContext.tsx         # Time simulation for testing
 ├── ThemeContext.tsx          # Dark/light theme management
 ├── AuthContext.tsx           # User authentication
+├── SubscriptionContext.tsx   # Subscription state management
+├── QueryProvider.tsx         # React Query provider
+├── ReduxProvider.tsx         # Redux toolkit provider
 └── AppContext.tsx            # Global app state
 
 lib/types/
@@ -600,7 +604,6 @@ CREATE TABLE notification_history (
 - **Performance Optimizations**: Database indexing and retry logic
 
 ### ❌ **Missing Features (Planned)**
-- **Onboarding Screens**: User education about Gold List Method (referenced but not implemented)
 - **Subscription System**: RevenueCat integration for freemium model
 - **Real Notifications**: iOS/Android push notifications (currently mocked)
 - **Paywall Integration**: Subscription upgrade flows
@@ -611,7 +614,7 @@ CREATE TABLE notification_history (
 ### ⚠️ **Current Limitations**
 - **iOS Notifications**: Disabled due to entitlement complexity during development
 - **Freemium Model**: Database has subscription fields but no enforcement yet
-- **Onboarding Flow**: Users go directly from auth to dashboard
+- **Simple Auth Flow**: Users go directly from authentication to dashboard
 - **RevenueCat**: Dependencies present but integration not implemented
 - **Real-time Sync**: Supabase real-time enabled but not fully utilized
 
@@ -637,4 +640,32 @@ CREATE TABLE notification_history (
 - **TypeScript Strict Mode**: Complete type safety across entire codebase
 - **Performance First**: Parallel processing and optimized database queries
 
-This documentation reflects the current state as of the most recent development session, including the notification system implementation and AI sentence generation features.
+## Authentication Flow
+
+### Current Implementation
+The app follows a streamlined authentication approach:
+
+1. **Unauthenticated Users**: Automatically redirected to sign-in screen
+2. **Authentication Options**: Sign in or sign up (no skip option)
+3. **Post-Authentication**: Direct navigation to main dashboard
+4. **Route Protection**: AuthGuard ensures proper authentication state management
+
+### AuthGuard Logic
+- **Simple Flow**: Auth check → Redirect to signin if unauthenticated → Main app if authenticated
+- **No Onboarding**: Removed all onboarding-related logic and screens
+- **Pre-trial Handling**: Users with pre-trial status are redirected to paywall
+- **Clean Navigation**: Streamlined routing without complex state management
+
+### Authentication Context Providers
+The app uses a hierarchical context structure:
+```
+DevTimeProvider
+└── ThemeProvider
+    └── AuthProvider
+        └── QueryProvider
+            └── SubscriptionProvider
+                └── AppProvider
+                    └── ReduxProvider
+```
+
+This documentation reflects the current state as of the most recent development session, with simplified authentication flow and removed onboarding system.

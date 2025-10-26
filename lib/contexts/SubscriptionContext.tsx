@@ -87,9 +87,9 @@ const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'monthly',
     name: 'Monthly',
-    price: '$15.99',
+    price: '$9.99',
     duration: 'per month',
-    savings: 'Save 20%',
+    savings: 'Save 50%',
     features: [
       'Everything in Weekly',
       'Extended cloud storage',
@@ -101,9 +101,9 @@ const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'yearly',
     name: 'Yearly',
-    price: '$39.99',
+    price: '$49.99',
     duration: 'per year',
-    savings: 'Save 84%',
+    savings: 'Save 58%',
     features: [
       'Everything in Monthly',
       'Lifetime updates',
@@ -215,7 +215,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           // Calculate client-side for comparison
           const msElapsed = currentDate.getTime() - trialStartedAt.getTime()
           const daysElapsedClientSide = Math.floor(msElapsed / (1000 * 60 * 60 * 24))
-          const daysRemainingClientSide = Math.max(0, 15 - daysElapsedClientSide)
+          const daysRemainingClientSide = Math.max(0, 14 - daysElapsedClientSide)
           
           console.log(`🔍 === RESULTS ===`)
           console.log(`🔍 Database: isInTrial=${isInTrial}, daysRemaining=${trialDaysRemaining}`)
@@ -225,7 +225,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           console.error('Error checking trial status from database:', error)
           // Fallback to client-side calculation
           const trialEndDate = new Date(trialStartedAt)
-          trialEndDate.setDate(trialEndDate.getDate() + 15)
+          trialEndDate.setDate(trialEndDate.getDate() + 14)
           isInTrial = trialEndDate > currentDate
           
           if (isInTrial) {
@@ -314,7 +314,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           activatedAt: currentDate,
           isInTrial: true,
           trialStartedAt: currentDate,
-          trialDaysRemaining: 15
+          trialDaysRemaining: 14
         }
         
         setSubscription(newSubscriptionState)
@@ -327,10 +327,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           activatedAt: currentDate.toISOString(),
           isInTrial: true,
           trialStartedAt: currentDate.toISOString(),
-          trialDaysRemaining: 15
+          trialDaysRemaining: 14
         }))
 
-        console.log('✅ Free trial started: 15 days - Local state and storage updated')
+        console.log('✅ Free trial started: 14 days - Local state and storage updated')
         
         // Release state lock after a delay to allow state to settle
         setTimeout(() => {
@@ -637,20 +637,44 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       return
     }
     
+    // Check if navigation is safe to perform
+    const checkNavigationReady = () => {
+      try {
+        // Test navigation readiness by checking router state
+        if (!router || typeof router.push !== 'function') {
+          return false
+        }
+        return true
+      } catch {
+        return false
+      }
+    }
+    
     // Update last navigation time
     lastPaywallNavigationTime.current = now
     console.log(`📱 Navigating to paywall at ${new Date(now).toISOString()}`)
     
-    // Add a small delay to ensure router is fully mounted
+    // Add a larger delay to ensure router is fully mounted
     setTimeout(() => {
+      if (!checkNavigationReady()) {
+        console.warn('Router not ready, skipping paywall navigation')
+        lastPaywallNavigationTime.current = 0
+        return
+      }
+      
       try {
         router.push('/paywall')
       } catch (error) {
         console.warn('Navigation failed, router not ready:', error)
         // Reset navigation time on failure to allow retry
         lastPaywallNavigationTime.current = 0
-        // Retry after a longer delay
+        // Retry after a longer delay with additional safety check
         setTimeout(() => {
+          if (!checkNavigationReady()) {
+            console.warn('Router still not ready, canceling paywall navigation')
+            return
+          }
+          
           try {
             router.push('/paywall')
             lastPaywallNavigationTime.current = Date.now()
@@ -658,9 +682,9 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
             console.error('Navigation failed after retry:', retryError)
             lastPaywallNavigationTime.current = 0
           }
-        }, 2000)
+        }, 3000) // Increased delay
       }
-    }, 100)
+    }, 500) // Increased initial delay
   }, [router])
 
   const contextValue: SubscriptionContextType = {

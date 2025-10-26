@@ -738,16 +738,28 @@ class SupabaseService {
         const daysSinceLastActivity = lastActivity ? 
           Math.floor((new Date(today).getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24)) : 999
 
-        console.log(`🔥 supabaseService: User HAS activity - daysSinceLastActivity=${daysSinceLastActivity}, lastActivity=${lastActivity}`)
+        console.log(`🔥 supabaseService: User HAS activity - daysSinceLastActivity=${daysSinceLastActivity}, lastActivity=${lastActivity}, currentStreak=${profile.streak_count}`)
 
-        if (!lastActivity || daysSinceLastActivity > 2) {
-          // First time activity or too many days missed - start new streak at 1
+        if (!lastActivity) {
+          // First time activity ever - start streak at 1
           newStreakCount = 1
-          console.log(`🔥 supabaseService: First activity or too many days missed, streak set to 1`)
-        } else if (daysSinceLastActivity <= 2) {
-          // Consecutive day or within 2-day grace period - increment existing streak
-          newStreakCount += 1
-          console.log(`🔥 supabaseService: Within grace period, streak increased to ${newStreakCount}`)
+          console.log(`🔥 supabaseService: First activity ever, streak set to 1`)
+        } else if (daysSinceLastActivity === 0) {
+          // Same day activity - keep existing streak (don't increment on same day)
+          newStreakCount = profile.streak_count
+          console.log(`🔥 supabaseService: Same day activity, keeping streak at ${newStreakCount}`)
+        } else if (daysSinceLastActivity === 1) {
+          // Consecutive day - increment streak
+          newStreakCount = profile.streak_count + 1
+          console.log(`🔥 supabaseService: Consecutive day, streak increased to ${newStreakCount}`)
+        } else if (daysSinceLastActivity === 2) {
+          // One day gap (within grace period) - increment streak
+          newStreakCount = profile.streak_count + 1
+          console.log(`🔥 supabaseService: Within 2-day grace period, streak increased to ${newStreakCount}`)
+        } else {
+          // Gap too large (>2 days) - streak was broken, start new streak at 1
+          newStreakCount = 1
+          console.log(`🔥 supabaseService: Gap too large (${daysSinceLastActivity} days), starting new streak at 1`)
         }
 
         // Update longest streak if current streak is higher
@@ -791,7 +803,8 @@ class SupabaseService {
 
       if (updateError) throw updateError
 
-      console.log(`🔥 Streak updated for user ${userId.slice(0, 8)}: ${newStreakCount} days`)
+      console.log(`🔥 Streak updated for user ${userId.slice(0, 8)}: ${profile.streak_count} → ${newStreakCount} days`)
+      console.log(`🔥 Streak details: longest=${newLongestStreak}, missCount=${newMissCount}, lastActivity=${newLastActivityDate}`)
     }, 'updateStreak')
   }
 
@@ -830,30 +843,91 @@ class SupabaseService {
     }, 'getStreakStatus')
   }
 
+  async hasActivityToday(userId: string, currentDate?: Date): Promise<boolean> {
+    // Check if user has any streak-worthy activity for the given date
+    return withRetry(async () => {
+      const today = (currentDate || getCurrentDate()).toISOString().split('T')[0]
+      
+      // Get user's notebooks
+      const { data: notebooks, error: notebooksError } = await supabase
+        .from('notebooks')
+        .select('id')
+        .eq('user_id', userId)
+
+      if (notebooksError) throw notebooksError
+      if (!notebooks || notebooks.length === 0) return false
+
+      const notebookIds = notebooks.map(n => n.id)
+
+      // Check for words added today
+      const { count: wordsCount, error: wordsError } = await supabase
+        .from('words')
+        .select('id', { count: 'exact', head: true })
+        .in('notebook_id', notebookIds)
+        .gte('created_at', today + 'T00:00:00.000Z')
+        .lt('created_at', today + 'T23:59:59.999Z')
+
+      if (wordsError) throw wordsError
+
+      // Check for reviews completed today - get word IDs first
+      const { data: todaysWords, error: todaysWordsError } = await supabase
+        .from('words')
+        .select('id')
+        .in('notebook_id', notebookIds)
+
+      if (todaysWordsError) throw todaysWordsError
+      
+      let reviewsCount = 0
+      if (todaysWords && todaysWords.length > 0) {
+        const wordIds = todaysWords.map(w => w.id)
+        
+        const { count, error: reviewsError } = await supabase
+          .from('reviews')
+          .select('id', { count: 'exact', head: true })
+          .in('word_id', wordIds)
+          .gte('created_at', today + 'T00:00:00.000Z')
+          .lt('created_at', today + 'T23:59:59.999Z')
+
+        if (reviewsError) throw reviewsError
+        reviewsCount = count || 0
+      }
+
+      const hasActivity = (wordsCount || 0) > 0 || reviewsCount > 0
+      console.log(`🔥 hasActivityToday(${today}): ${wordsCount || 0} words, ${reviewsCount || 0} reviews = ${hasActivity}`)
+      
+      return hasActivity
+    }, 'hasActivityToday')
+  }
+
   async recordActivity(userId: string, currentDate?: Date): Promise<void> {
     // This function is called when user does a streak-worthy activity
     // Implements smart daily activity checking to prevent double-counting
     return withRetry(async () => {
       const today = (currentDate || getCurrentDate()).toISOString().split('T')[0]
       
-      // Check if user already has activity recorded for today
+      // Check both profile data AND actual daily activity to prevent race conditions
       const { data: profile, error: fetchError } = await supabase
         .from('profiles')
-        .select('last_activity_date')
+        .select('last_activity_date, streak_count')
         .eq('id', userId)
         .single()
 
       if (fetchError) throw fetchError
       if (!profile) throw new Error('Profile not found')
 
-      // If user already has activity today, don't double-count
-      if (profile.last_activity_date === today) {
-        console.log(`🔥 Activity already recorded for today (${today}), skipping duplicate`)
+      // Enhanced activity check: Look at actual database activity, not just profile date
+      const hasRealActivity = await this.hasActivityToday(userId, currentDate)
+      
+      console.log(`🔥 Activity check for ${today}: profile.last_activity_date=${profile.last_activity_date}, hasRealActivity=${hasRealActivity}, current_streak=${profile.streak_count}`)
+
+      // If user already has REAL activity today (words or reviews), don't double-count
+      if (profile.last_activity_date === today && hasRealActivity) {
+        console.log(`🔥 Activity already recorded for today (${today}) with real database activity, skipping duplicate`)
         return
       }
 
-      // Record activity and update streak
-      console.log(`🔥 Recording first activity of the day (${today}) - updating streak`)
+      // For new users or users without activity today, record activity and update streak
+      console.log(`🔥 Recording activity for ${today} - updating streak from ${profile.streak_count}`)
       await this.updateStreak(userId, true, currentDate)
     }, 'recordActivity')
   }
@@ -1704,6 +1778,7 @@ class SupabaseService {
     // Simplified - do nothing for now
   }
 
+
   async getWeeklyProgress(): Promise<FrontendWeeklyProgressDay[]> {
     return withRetry(async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -1958,6 +2033,18 @@ class SupabaseService {
       if (error) throw error
       console.log(`✅ Profile stats updated: ${newTotalAdded} total added, ${newTotalMastered} total mastered`)
     }, 'updateProfileStats')
+  }
+
+  async updateProfile(userId: string, updates: Record<string, any>): Promise<void> {
+    return withRetry(async () => {
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', userId)
+
+      if (error) throw error
+      console.log(`✅ Profile updated for user ${userId}:`, updates)
+    }, 'updateProfile')
   }
 
   async syncProfileStats(): Promise<void> {
@@ -3556,6 +3643,95 @@ class SupabaseService {
         longest_streak: 0
       }
     }, 'getUserStatsWithArchives')
+  }
+
+  // =============================================
+  // SURVEY RESPONSE OPERATIONS
+  // =============================================
+
+  // Save user survey response with validation and consent
+  async saveSurveyResponse(surveyData: {
+    hearAboutUs?: string
+    language?: string
+    level?: string
+    challenge?: string
+    memory?: string
+    goldListExperience?: string
+    unknownWordsDaily?: number
+    findWordsFrom?: string[]
+    learningReason?: string[]
+    consentGiven?: boolean
+    appVersion?: string
+    onboardingCompleted?: boolean
+  }): Promise<{ success: boolean; data?: any; error?: string }> {
+    return withRetry(async () => {
+      console.log('💾 Saving survey response:', surveyData)
+
+      const { data, error } = await supabase.rpc('save_survey_response', {
+        p_hear_about_us: surveyData.hearAboutUs || null,
+        p_target_language: surveyData.language || null,
+        p_current_level: surveyData.level || null,
+        p_biggest_challenge: surveyData.challenge || null,
+        p_memory_assessment: surveyData.memory || null,
+        p_goldlist_experience: surveyData.goldListExperience || null,
+        p_unknown_words_daily: surveyData.unknownWordsDaily || null,
+        p_word_sources: surveyData.findWordsFrom || null,
+        p_learning_reasons: surveyData.learningReason || null,
+        p_consent_given: surveyData.consentGiven || false,
+        p_app_version: surveyData.appVersion || '1.0.0',
+        p_onboarding_completed: surveyData.onboardingCompleted || false
+      })
+
+      if (error) {
+        console.error('💾 Error saving survey response:', error)
+        throw new Error(`Failed to save survey response: ${error.message}`)
+      }
+
+      console.log('💾 Survey response saved successfully:', data)
+      return data
+    }, 'saveSurveyResponse')
+  }
+
+  // Get user's survey response
+  async getSurveyResponse(): Promise<{ success: boolean; data?: any; error?: string }> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_survey_response')
+
+      if (error) {
+        console.error('📄 Error getting survey response:', error)
+        throw new Error(`Failed to get survey response: ${error.message}`)
+      }
+
+      return data
+    }, 'getSurveyResponse')
+  }
+
+  // Delete user's survey response (GDPR compliance)
+  async deleteSurveyResponse(): Promise<{ success: boolean; deleted?: boolean; error?: string }> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('delete_survey_response')
+
+      if (error) {
+        console.error('🗑️ Error deleting survey response:', error)
+        throw new Error(`Failed to delete survey response: ${error.message}`)
+      }
+
+      return data
+    }, 'deleteSurveyResponse')
+  }
+
+  // Get survey analytics (admin only)
+  async getSurveyAnalytics(): Promise<{ success: boolean; data?: any; error?: string }> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_survey_analytics')
+
+      if (error) {
+        console.error('📊 Error getting survey analytics:', error)
+        throw new Error(`Failed to get survey analytics: ${error.message}`)
+      }
+
+      return data
+    }, 'getSurveyAnalytics')
   }
 }
 

@@ -28,13 +28,21 @@ export function StreakProgressDisplay({
   const streakIncreased = previousStreak !== undefined && currentStreak > previousStreak
   const isNewStreak = currentStreak === 1
 
+  // 🔥 DEBUG: Enhanced logging for streak celebration
+  console.log(`🔥 StreakProgressDisplay: currentStreak=${currentStreak}, previousStreak=${previousStreak}, streakIncreased=${streakIncreased}, isNewStreak=${isNewStreak}, showAnimation=${showAnimation}`)
+
   // Get streak message
   const getStreakMessage = () => {
     if (currentStreak === 0) return "Start your learning streak!"
-    if (isNewStreak) return "🎉 Streak started!"
+    if (isNewStreak && previousStreak === 0) return "🎉 Streak started!"
     if (streakIncreased) return `🔥 Streak increased to ${currentStreak}!`
+    if (currentStreak === 1 && (previousStreak === undefined || previousStreak === 0)) return "🎉 First day streak!"
     return "🔥 Daily streak maintained!"
   }
+
+  // 🔥 DEBUG: Log what message is being shown
+  const streakMessage = getStreakMessage()
+  console.log(`🔥 StreakProgressDisplay: Message = "${streakMessage}"`)
 
   // Get streak motivation
   const getStreakMotivation = () => {
@@ -120,7 +128,7 @@ export function StreakProgressDisplay({
       </View>
       
       <View style={styles.messageContainer}>
-        <Text style={styles.streakMessage}>{getStreakMessage()}</Text>
+        <Text style={styles.streakMessage}>{streakMessage}</Text>
         {!compact && (
           <Text style={styles.streakMotivation}>{getStreakMotivation()}</Text>
         )}
