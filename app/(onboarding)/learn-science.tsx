@@ -115,8 +115,8 @@ export default function LearnScienceScreen() {
     <OnboardingScreen
       currentStep={2}
       totalSteps={24}
-      headline="Learn with Science."
-      subtext="The Gold List Method is backed by cognitive science research. Here's how it works:"
+      headline="Learn with Proven Principles."
+      subtext="The Gold List Method uses well-established learning techniques. Here's how it works:"
       primaryButtonText="Show me more"
       onPrimaryPress={handleContinue}
       showSkip={true}

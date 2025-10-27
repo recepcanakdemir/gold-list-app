@@ -1,12 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useRouter } from 'expo-router'
+import { Platform } from 'react-native'
+import Constants from 'expo-constants'
 import { useAuth } from './AuthContext'
 import { useDevTime } from './DevTimeContext'
 import { supabaseService } from '@/lib/services/supabaseService'
+import { revenueCatService } from '@/lib/services/revenueCatService'
+import { PRODUCT_IDS, ENTITLEMENTS } from '@/lib/types/revenuecat'
+import type { CustomerInfo, Package, Offering } from 'react-native-purchases'
 
 // Subscription types and interfaces
-export type SubscriptionTier = 'free' | 'trial' | 'weekly' | 'monthly' | 'yearly'
+export type SubscriptionTier = 'free' | 'weekly' | 'monthly' | 'yearly'
 
 export interface SubscriptionPlan {
   id: SubscriptionTier
@@ -23,51 +28,32 @@ export interface SubscriptionState {
   isActive: boolean
   expiresAt: Date | null
   activatedAt: Date | null
-  // Trial specific fields
-  isInTrial: boolean
-  trialStartedAt: Date | null
-  trialDaysRemaining: number
 }
-
-// Four-state user system for paywall management
-export type UserState = 'pre-trial' | 'trial' | 'post-trial' | 'premium'
 
 interface SubscriptionContextType {
   subscription: SubscriptionState
   plans: SubscriptionPlan[]
   isLoading: boolean
   
-  // Trial management
-  startFreeTrial: () => Promise<boolean>
+  // RevenueCat state
+  offerings: Offering[]
+  currentOffering: Offering | null
+  customerInfo: CustomerInfo | null
   
-  // Subscription management
-  activateSubscription: (planId: SubscriptionTier) => Promise<boolean>
-  cancelSubscription: () => Promise<boolean>
-  restoreSubscription: () => Promise<boolean>
+  // Subscription management (RevenueCat)
+  purchasePackage: (packageId: string) => Promise<boolean>
+  restorePurchases: () => Promise<boolean>
   
-  // Feature checks
-  canCreateNotebook: () => Promise<boolean>
-  canAddWords: () => Promise<boolean>
-  hasFeature: (feature: string) => boolean
+  // Removed: All feature checks and UI helpers (hard paywall model)
   
-  // User state helpers
-  getUserState: () => UserState
-  canExitPaywall: () => boolean
-  
-  // UI helpers
-  getUpgradeMessage: (context: string) => string
-  showPaywallModal: () => void
-  // Deprecated: use showPaywallModal instead
-  showPaywall: boolean
-  setShowPaywall: (show: boolean) => void
-  
-  // Debug helpers (development only)
-  debugTrialStatus: () => Promise<any>
+  // RevenueCat helpers
+  initializeRevenueCat: () => Promise<boolean>
+  syncWithRevenueCat: () => Promise<void>
 }
 
 const SubscriptionContext = createContext<SubscriptionContextType | null>(null)
 
-// Subscription plans configuration
+// Subscription plans configuration (mapped to RevenueCat product IDs)
 const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'weekly',
@@ -114,6 +100,14 @@ const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   }
 ]
 
+// Map subscription tiers to RevenueCat product IDs
+const TIER_TO_PRODUCT_ID: Record<SubscriptionTier, string> = {
+  'free': '',
+  'weekly': PRODUCT_IDS.WEEKLY,
+  'monthly': PRODUCT_IDS.MONTHLY,
+  'yearly': PRODUCT_IDS.YEARLY
+}
+
 // Premium features list
 const PREMIUM_FEATURES = [
   'unlimited_notebooks',
@@ -141,26 +135,244 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     tier: 'free',
     isActive: false,
     expiresAt: null,
-    activatedAt: null,
-    isInTrial: false,
-    trialStartedAt: null,
-    trialDaysRemaining: 0
+    activatedAt: null
   })
   const [isLoading, setIsLoading] = useState(true)
+
+  // Persist subscription state to AsyncStorage
+  const persistSubscriptionState = useCallback(async (state: SubscriptionState) => {
+    try {
+      await AsyncStorage.setItem('subscription_state_v2', JSON.stringify({
+        tier: state.tier,
+        isActive: state.isActive,
+        expiresAt: state.expiresAt?.toISOString(),
+        activatedAt: state.activatedAt?.toISOString(),
+        savedAt: new Date().toISOString()
+      }))
+      console.log('💾 Subscription state persisted:', {
+        tier: state.tier,
+        isActive: state.isActive,
+        expiresAt: state.expiresAt
+      })
+    } catch (error) {
+      console.error('❌ Failed to persist subscription state:', error)
+    }
+  }, [])
+
+  // Load subscription state from AsyncStorage
+  const loadPersistedSubscriptionState = useCallback(async (): Promise<SubscriptionState | null> => {
+    try {
+      const stored = await AsyncStorage.getItem('subscription_state_v2')
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        const state: SubscriptionState = {
+          tier: parsed.tier || 'free',
+          isActive: parsed.isActive || false,
+          expiresAt: parsed.expiresAt ? new Date(parsed.expiresAt) : null,
+          activatedAt: parsed.activatedAt ? new Date(parsed.activatedAt) : null
+        }
+        console.log('📱 Restored subscription state from storage:', {
+          tier: state.tier,
+          isActive: state.isActive,
+          expiresAt: state.expiresAt,
+          savedAt: parsed.savedAt
+        })
+        return state
+      }
+    } catch (error) {
+      console.error('❌ Failed to load persisted subscription state:', error)
+    }
+    return null
+  }, [])
+
+  // Enhanced setSubscription that also persists state
+  const updateSubscriptionState = useCallback((newState: SubscriptionState) => {
+    console.log('🔄 Updating subscription state:', {
+      from: { tier: subscription.tier, isActive: subscription.isActive },
+      to: { tier: newState.tier, isActive: newState.isActive }
+    })
+    setSubscription(newState)
+    persistSubscriptionState(newState)
+  }, [subscription.tier, subscription.isActive, persistSubscriptionState])
+
   const [showPaywall, setShowPaywall] = useState(false)
+  
+  // RevenueCat state
+  const [offerings, setOfferings] = useState<Offering[]>([])
+  const [currentOffering, setCurrentOffering] = useState<Offering | null>(null)
+  const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null)
+  const [revenueCatInitialized, setRevenueCatInitialized] = useState(false)
+  
+  // Refs for state management
   const isUpdatingLocalState = useRef(false)
   const lastStateUpdateTime = useRef<number>(0)
   const lastPaywallNavigationTime = useRef<number>(0)
 
+  // Initialize RevenueCat
+  const initializeRevenueCat = useCallback(async (): Promise<boolean> => {
+    if (revenueCatInitialized) {
+      console.log('📱 RevenueCat already initialized')
+      return true
+    }
 
-  // Load subscription state from profile
+    try {
+      console.log('🚀 Initializing RevenueCat...')
+      
+      // Get API keys from environment
+      const apiKeyIOS = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_IOS
+      const enableDebugLogs = process.env.EXPO_PUBLIC_REVENUECAT_DEBUG_LOGS === 'true'
+      
+      console.log('🔑 RevenueCat environment check:', {
+        apiKeyIOS: apiKeyIOS ? 'Found' : 'Missing',
+        apiKeyValue: apiKeyIOS ? `${apiKeyIOS.substring(0, 8)}...${apiKeyIOS.slice(-4)}` : 'N/A',
+        enableDebugLogs,
+        platform: Platform.OS
+      })
+      
+      if (!apiKeyIOS && Platform.OS === 'ios') {
+        console.error('❌ RevenueCat iOS API key not found')
+        return false
+      }
+
+      await revenueCatService.initialize({
+        apiKeyIOS,
+        enableDebugLogs
+      })
+
+      // Set user ID if we have one
+      if (user?.id) {
+        await revenueCatService.setUserId(user.id)
+      }
+
+      // Load offerings
+      const allOfferings = await revenueCatService.getOfferings()
+      const current = await revenueCatService.getCurrentOffering()
+      
+      setOfferings(allOfferings)
+      setCurrentOffering(current)
+      setRevenueCatInitialized(true)
+      
+      console.log('✅ RevenueCat initialized successfully')
+      return true
+    } catch (error) {
+      console.error('❌ Failed to initialize RevenueCat:', error)
+      return false
+    }
+  }, [revenueCatInitialized, user?.id])
+
+  // Sync with RevenueCat and update local state
+  const syncWithRevenueCat = useCallback(async (): Promise<void> => {
+    if (!revenueCatInitialized || !user?.id) {
+      console.log('⏭️ Skipping RevenueCat sync - not initialized or no user')
+      return
+    }
+
+    try {
+      // console.log('🔄 Syncing with RevenueCat...')
+      
+      const subscriptionInfo = await revenueCatService.getSubscriptionInfo()
+      const customerInfo = subscriptionInfo.customerInfo
+      
+      if (customerInfo) {
+        setCustomerInfo(customerInfo)
+        
+        // Update local subscription state based on RevenueCat data and persist it
+        updateSubscriptionState({
+          tier: subscriptionInfo.tier,
+          isActive: subscriptionInfo.isActive,
+          expiresAt: subscriptionInfo.subscriptionExpiresAt,
+          activatedAt: subscriptionInfo.subscriptionStartedAt,
+          isInTrial: subscriptionInfo.isInTrial,
+          trialStartedAt: subscriptionInfo.trialStartedAt,
+          trialDaysRemaining: subscriptionInfo.isInTrial && subscriptionInfo.trialEndsAt ? 
+            Math.max(0, Math.ceil((subscriptionInfo.trialEndsAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0
+        })
+
+        // Sync to database
+        if (subscriptionInfo.customerInfo) {
+          await supabaseService.syncRevenueCatData({
+            userId: user.id,
+            customerInfo: subscriptionInfo.customerInfo,
+            subscriptionStatus: subscriptionInfo.tier,
+            subscriptionExpiresAt: subscriptionInfo.subscriptionExpiresAt,
+            subscriptionActivatedAt: subscriptionInfo.subscriptionStartedAt,
+            revenueCatCustomerId: subscriptionInfo.customerInfo.originalAppUserId,
+            originalPurchaseDate: subscriptionInfo.originalPurchaseDate,
+            isInTrial: subscriptionInfo.isInTrial,
+            trialStartedAt: subscriptionInfo.trialStartedAt
+          })
+        }
+        
+        // console.log('✅ RevenueCat sync completed', {
+        //   userState: subscriptionInfo.userState,
+        //   isActive: subscriptionInfo.isActive,
+        //   tier: subscriptionInfo.tier
+        // })
+      }
+    } catch (error) {
+      console.error('❌ Failed to sync with RevenueCat:', error)
+    }
+  }, [revenueCatInitialized, user?.id])
+
+  // Load persisted subscription state immediately on app startup
+  useEffect(() => {
+    const loadInitialState = async () => {
+      console.log('🚀 SubscriptionContext: Loading initial state...')
+      
+      // Load persisted state immediately to prevent race conditions
+      const persistedState = await loadPersistedSubscriptionState()
+      if (persistedState) {
+        console.log('⚡ Using persisted subscription state for immediate AuthGuard decisions')
+        setSubscription(persistedState)
+        setIsLoading(false) // Mark as loaded so AuthGuard can proceed
+      } else {
+        console.log('📱 No persisted subscription state found, using defaults')
+        setIsLoading(false) // Still mark as loaded so AuthGuard can proceed with defaults
+      }
+    }
+    
+    loadInitialState()
+  }, [loadPersistedSubscriptionState])
+
+  // Initialize RevenueCat when user is available
+  useEffect(() => {
+    if (user?.id && !revenueCatInitialized) {
+      initializeRevenueCat().then(success => {
+        if (success) {
+          console.log('🔄 RevenueCat initialized, syncing subscription state...')
+          syncWithRevenueCat()
+        }
+      })
+    }
+  }, [user?.id, initializeRevenueCat, revenueCatInitialized, syncWithRevenueCat])
+
+  // Recovery mechanism: If RevenueCat takes too long, ensure AuthGuard isn't blocked
+  useEffect(() => {
+    if (user?.id && isLoading) {
+      console.log('⏰ Setting up subscription loading timeout...')
+      const timeoutId = setTimeout(() => {
+        if (isLoading) {
+          console.log('⚠️ Subscription loading timeout - unblocking AuthGuard with current state')
+          setIsLoading(false)
+        }
+      }, 5000) // 5 second timeout
+
+      return () => clearTimeout(timeoutId)
+    }
+  }, [user?.id, isLoading])
+
+  // Load subscription state from profile and sync with RevenueCat
   useEffect(() => {
     if (profile) {
       loadSubscriptionFromProfile()
+      // Also sync with RevenueCat after loading profile
+      if (revenueCatInitialized) {
+        syncWithRevenueCat()
+      }
     } else {
       setIsLoading(false)
     }
-  }, [profile, loadSubscriptionFromProfile])
+  }, [profile, loadSubscriptionFromProfile, revenueCatInitialized, syncWithRevenueCat])
 
   // Refresh subscription data when DevTime day changes (for accurate trial countdown)
   useEffect(() => {
@@ -169,10 +381,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     const isRecentUpdate = timeSinceLastUpdate < 5000 // 5 seconds
     
     if (profile && subscription.isInTrial && !isUpdatingLocalState.current && !isRecentUpdate) {
-      console.log(`🔄 DevTime day changed to ${currentSimulatedDay}, refreshing trial status...`)
+      // console.log(`🔄 DevTime day changed to ${currentSimulatedDay}, refreshing trial status...`)
       loadSubscriptionFromProfile()
     } else if (isUpdatingLocalState.current || isRecentUpdate) {
-      console.log(`🔄 DevTime: Skipping refresh - state update in progress (isUpdating: ${isUpdatingLocalState.current}, recent: ${isRecentUpdate})`)
+      // console.log(`🔄 DevTime: Skipping refresh - state update in progress (isUpdating: ${isUpdatingLocalState.current}, recent: ${isRecentUpdate})`)
     }
   }, [currentSimulatedDay, profile, subscription.isInTrial, loadSubscriptionFromProfile])
 
@@ -185,7 +397,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     
     try {
       setIsLoading(true)
-      console.log('📄 Loading subscription state from profile...')
+      // console.log('📄 Loading subscription state from profile...')
       
       const tier = (profile?.subscription_status as SubscriptionTier) || 'free'
       const expiresAt = profile?.subscription_expires_at ? new Date(profile.subscription_expires_at) : null
@@ -237,7 +449,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       
       const isActive = isPremium || isInTrial
       
-      setSubscription({
+      updateSubscriptionState({
         tier,
         isActive,
         expiresAt,
@@ -247,195 +459,214 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
         trialDaysRemaining
       })
       
-      // Also save to AsyncStorage for offline access
-      await AsyncStorage.setItem('subscription_state', JSON.stringify({
-        tier,
-        isActive,
-        expiresAt: expiresAt?.toISOString(),
-        activatedAt: activatedAt?.toISOString()
-      }))
-      
     } catch (error) {
       console.error('Error loading subscription state:', error)
       
-      // Fallback to AsyncStorage
+      // Fallback to AsyncStorage (using the same v2 format)
       try {
-        const stored = await AsyncStorage.getItem('subscription_state')
-        if (stored) {
-          const parsed = JSON.parse(stored)
-          setSubscription({
-            tier: parsed.tier || 'free',
-            isActive: parsed.isActive || false,
-            expiresAt: parsed.expiresAt ? new Date(parsed.expiresAt) : null,
-            activatedAt: parsed.activatedAt ? new Date(parsed.activatedAt) : null,
-            isInTrial: parsed.isInTrial || false,
-            trialStartedAt: parsed.trialStartedAt ? new Date(parsed.trialStartedAt) : null,
-            trialDaysRemaining: parsed.trialDaysRemaining || 0
-          })
+        const persistedState = await loadPersistedSubscriptionState()
+        if (persistedState) {
+          console.log('🔄 Loaded fallback subscription state from AsyncStorage')
+          setSubscription(persistedState)
         }
       } catch (storageError) {
-        console.error('Error loading from AsyncStorage:', storageError)
+        console.error('Error loading from AsyncStorage fallback:', storageError)
       }
     } finally {
       setIsLoading(false)
     }
   }, [profile, getCurrentDate, user?.id])
 
-  // Start free trial (mock implementation)
-  const startFreeTrial = useCallback(async (): Promise<boolean> => {
-    if (!user?.id) {
-      console.error('No user ID for trial activation')
+  // =============================================
+  // REVENUECAT PURCHASE METHODS
+  // =============================================
+
+  // Start Apple-managed trial (RevenueCat)
+  const startAppleTrial = useCallback(async (): Promise<boolean> => {
+    if (!user?.id || !revenueCatInitialized) {
+      console.error('❌ Cannot start trial: user not found or RevenueCat not initialized')
       return false
     }
 
     try {
-      // Set local state lock to prevent overwrites
-      isUpdatingLocalState.current = true
-      lastStateUpdateTime.current = Date.now()
-      console.log('🔒 State lock activated for trial start')
-      
-      // Start trial in database using DevTime
-      const currentDate = getCurrentDate()
-      console.log('🗄️ Starting trial in database...')
-      const success = await supabaseService.startFreeTrial(user.id, currentDate)
-      
-      if (success) {
-        
-        console.log('🗄️ Database trial start successful, updating local state...')
-        
-        // Wait a brief moment for database to process
-        await new Promise(resolve => setTimeout(resolve, 500))
-        
-        // Update local state
-        const newSubscriptionState = {
-          tier: 'trial' as SubscriptionTier,
-          isActive: true,
-          expiresAt: null,
-          activatedAt: currentDate,
-          isInTrial: true,
-          trialStartedAt: currentDate,
-          trialDaysRemaining: 14
-        }
-        
-        setSubscription(newSubscriptionState)
+      setIsLoading(true)
+      console.log('🍎 Starting Apple trial via RevenueCat...')
 
-        // Save to AsyncStorage
-        await AsyncStorage.setItem('subscription_state', JSON.stringify({
-          tier: 'trial',
-          isActive: true,
-          expiresAt: null,
-          activatedAt: currentDate.toISOString(),
-          isInTrial: true,
-          trialStartedAt: currentDate.toISOString(),
-          trialDaysRemaining: 14
-        }))
-
-        console.log('✅ Free trial started: 14 days - Local state and storage updated')
-        
-        // Release state lock after a delay to allow state to settle
-        setTimeout(() => {
-          isUpdatingLocalState.current = false
-          console.log('🔓 State lock released after successful trial start')
-        }, 4000) // Increased to 4 seconds for better stability
-        
-        return true
-      } else {
-        console.error('❌ Database trial start failed')
-      }
-      
-      return false
-    } catch (error) {
-      console.error('Error starting free trial:', error)
-      // Release state lock on error
-      setTimeout(() => {
-        isUpdatingLocalState.current = false
-        console.log('🔓 State lock released after error')
-      }, 1000)
-      return false
-    }
-  }, [user?.id, getCurrentDate])
-
-  // Mock subscription activation (for testing without RevenueCat)
-  const activateSubscription = useCallback(async (planId: SubscriptionTier): Promise<boolean> => {
-    if (!user?.id) {
-      console.error('No user ID for subscription activation')
-      return false
-    }
-
-    try {
-      // Set local state lock to prevent overwrites during subscription activation
-      isUpdatingLocalState.current = true
-      lastStateUpdateTime.current = Date.now()
-      console.log('🔒 State lock activated for subscription activation')
-      
-      const plan = SUBSCRIPTION_PLANS.find(p => p.id === planId)
-      if (!plan) {
-        console.error('Invalid plan ID:', planId)
-        // Release state lock on error
-        setTimeout(() => {
-          isUpdatingLocalState.current = false
-          console.log('🔓 State lock released after error')
-        }, 1000)
+      // Check if user can start trial
+      const hasUsedTrial = await revenueCatService.hasUsedTrialBefore()
+      if (hasUsedTrial) {
+        console.error('❌ User has already used trial before')
         return false
       }
 
-      // Calculate expiry date using DevTime
-      const currentDate = getCurrentDate()
-      const expiresAt = new Date(currentDate)
-      expiresAt.setDate(expiresAt.getDate() + plan.durationDays)
-
-      // Activate subscription in database with DevTime date
-      const success = await supabaseService.activateSubscription(user.id, planId, plan.durationDays, currentDate)
-      
-      if (success) {
-        // Update local state (converting from trial to premium)
-        setSubscription({
-          tier: planId,
-          isActive: true,
-          expiresAt,
-          activatedAt: currentDate,
-          isInTrial: false,
-          trialStartedAt: subscription.trialStartedAt, // Keep trial history
-          trialDaysRemaining: 0
-        })
-
-        // Save to AsyncStorage
-        await AsyncStorage.setItem('subscription_state', JSON.stringify({
-          tier: planId,
-          isActive: true,
-          expiresAt: expiresAt.toISOString(),
-          activatedAt: currentDate.toISOString(),
-          isInTrial: false,
-          trialStartedAt: subscription.trialStartedAt?.toISOString(),
-          trialDaysRemaining: 0
-        }))
-
-        console.log(`✅ Subscription activated: ${planId} until ${expiresAt.toISOString()}`)
-        
-        // Immediate state update - no delay to prevent race conditions
-        // The local state is already updated above, just refresh profile data
-        loadSubscriptionFromProfile()
-        
-        // Release state lock after successful activation
-        setTimeout(() => {
-          isUpdatingLocalState.current = false
-          console.log('🔓 State lock released after successful subscription activation')
-        }, 2000) // Shorter delay than trial to reduce race conditions
-        
-        return true
+      // Get current offering to find the weekly package (with trial)
+      const offering = await revenueCatService.getCurrentOffering()
+      if (!offering) {
+        console.error('❌ No current offering found')
+        return false
       }
+
+      // Find weekly package (which should have the trial)
+      const weeklyPackage = offering.availablePackages.find(
+        pkg => pkg.product.identifier === PRODUCT_IDS.WEEKLY
+      )
+
+      if (!weeklyPackage) {
+        console.error('❌ Weekly package not found in offering')
+        return false
+      }
+
+      console.log('💳 Purchasing weekly package with trial...', {
+        packageId: weeklyPackage.identifier,
+        productId: weeklyPackage.product.identifier,
+        price: weeklyPackage.product.priceString
+      })
+
+      // Purchase the package (Apple will handle trial period)
+      const result = await revenueCatService.purchasePackage(weeklyPackage)
       
-      return false
+      console.log('✅ Apple trial started successfully:', {
+        productIdentifier: result.productIdentifier
+      })
+
+      // Sync with RevenueCat to update local state
+      await syncWithRevenueCat()
+      
+      setIsLoading(false)
+      return true
     } catch (error) {
-      console.error('Error activating subscription:', error)
-      // Release state lock on error
-      setTimeout(() => {
-        isUpdatingLocalState.current = false
-        console.log('🔓 State lock released after subscription activation error')
-      }, 1000)
+      console.error('❌ Failed to start Apple trial:', error)
+      setIsLoading(false)
       return false
     }
-  }, [user?.id, getCurrentDate, loadSubscriptionFromProfile])
+  }, [user?.id, revenueCatInitialized, syncWithRevenueCat])
+
+  // Purchase a subscription package (RevenueCat)
+  const purchasePackage = useCallback(async (packageId: string): Promise<boolean> => {
+    if (!user?.id || !revenueCatInitialized) {
+      console.error('❌ Cannot purchase: user not found or RevenueCat not initialized')
+      return false
+    }
+
+    try {
+      setIsLoading(true)
+      console.log('💳 Purchasing package via RevenueCat...', { packageId })
+
+      // Get current offering
+      const offering = await revenueCatService.getCurrentOffering()
+      if (!offering) {
+        console.error('❌ No current offering found')
+        return false
+      }
+
+      // Find the requested package
+      const packageToPurchase = offering.availablePackages.find(
+        pkg => pkg.identifier === packageId
+      )
+
+      if (!packageToPurchase) {
+        console.error('❌ Package not found in offering:', packageId)
+        return false
+      }
+
+      console.log('💳 Purchasing package...', {
+        packageId: packageToPurchase.identifier,
+        productId: packageToPurchase.product.identifier,
+        price: packageToPurchase.product.priceString
+      })
+
+      // Purchase the package
+      const result = await revenueCatService.purchasePackage(packageToPurchase)
+      
+      console.log('✅ Purchase successful:', {
+        productIdentifier: result.productIdentifier
+      })
+
+      // Sync with RevenueCat to update local state
+      await syncWithRevenueCat()
+      
+      setIsLoading(false)
+      return true
+    } catch (error) {
+      console.error('❌ Purchase failed:', error)
+      setIsLoading(false)
+      return false
+    }
+  }, [user?.id, revenueCatInitialized, syncWithRevenueCat])
+
+  // Restore purchases (RevenueCat)
+  const restorePurchases = useCallback(async (): Promise<boolean> => {
+    if (!revenueCatInitialized) {
+      console.error('❌ Cannot restore: RevenueCat not initialized')
+      return false
+    }
+
+    try {
+      setIsLoading(true)
+      console.log('🔄 Restoring purchases via RevenueCat...')
+
+      const customerInfo = await revenueCatService.restorePurchases()
+      
+      console.log('✅ Purchases restored:', {
+        hasActiveEntitlements: Object.keys(customerInfo.entitlements.active).length > 0
+      })
+
+      // Sync with RevenueCat to update local state
+      await syncWithRevenueCat()
+      
+      setIsLoading(false)
+      return Object.keys(customerInfo.entitlements.active).length > 0
+    } catch (error) {
+      console.error('❌ Failed to restore purchases:', error)
+      setIsLoading(false)
+      return false
+    }
+  }, [revenueCatInitialized, syncWithRevenueCat])
+
+  // =============================================
+  // LEGACY MOCK METHODS (for backward compatibility)
+  // =============================================
+
+  // Start free trial (legacy - now calls Apple trial)
+  const startFreeTrial = useCallback(async (): Promise<boolean> => {
+    console.log('🔄 Legacy startFreeTrial called - redirecting to Apple trial')
+    return await startAppleTrial()
+  }, [startAppleTrial])
+
+  // Activate subscription (legacy - now uses RevenueCat)
+  const activateSubscription = useCallback(async (planId: SubscriptionTier): Promise<boolean> => {
+    console.log('🔄 Legacy activateSubscription called - using RevenueCat purchase')
+    
+    // Map plan ID to package ID and purchase via RevenueCat
+    const productId = TIER_TO_PRODUCT_ID[planId]
+    if (!productId) {
+      console.error('❌ No product ID found for plan:', planId)
+      return false
+    }
+
+    // For legacy compatibility, we need to find the package by product ID
+    try {
+      const offering = await revenueCatService.getCurrentOffering()
+      if (!offering) {
+        console.error('❌ No current offering found')
+        return false
+      }
+
+      const packageToPurchase = offering.availablePackages.find(
+        pkg => pkg.product.identifier === productId
+      )
+
+      if (!packageToPurchase) {
+        console.error('❌ Package not found for product ID:', productId)
+        return false
+      }
+
+      return await purchasePackage(packageToPurchase.identifier)
+    } catch (error) {
+      console.error('❌ Failed to activate subscription:', error)
+      return false
+    }
+  }, [purchasePackage])
 
   // Cancel subscription (mock implementation)
   const cancelSubscription = useCallback(async (): Promise<boolean> => {
@@ -447,7 +678,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       const success = await supabaseService.activateSubscription(user.id, 'free', 0, currentDate)
       
       if (success) {
-        setSubscription({
+        updateSubscriptionState({
           tier: 'free',
           isActive: false,
           expiresAt: null,
@@ -456,16 +687,6 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           trialStartedAt: subscription.trialStartedAt, // Keep trial history
           trialDaysRemaining: 0
         })
-
-        await AsyncStorage.setItem('subscription_state', JSON.stringify({
-          tier: 'free',
-          isActive: false,
-          expiresAt: null,
-          activatedAt: null,
-          isInTrial: false,
-          trialStartedAt: subscription.trialStartedAt?.toISOString(),
-          trialDaysRemaining: 0
-        }))
 
         console.log('✅ Subscription cancelled')
         return true
@@ -478,238 +699,29 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     }
   }, [user?.id])
 
-  // Restore subscription (mock implementation)
+  // Restore subscription (legacy - now calls RevenueCat)
   const restoreSubscription = useCallback(async (): Promise<boolean> => {
-    // Mock restore functionality
-    console.log('🔄 Restore subscription called (mock implementation)')
-    return false
-  }, [])
+    console.log('🔄 Legacy restoreSubscription called - redirecting to RevenueCat restore')
+    return await restorePurchases()
+  }, [restorePurchases])
 
-  // Feature check functions
-  const canCreateNotebook = useCallback(async (): Promise<boolean> => {
-    // Premium users have unlimited notebooks
-    if (['weekly', 'monthly', 'yearly'].includes(subscription.tier)) return true
-    if (!user?.id) return false
-
-    try {
-      // Single notebook limit for trial/free users - pass DevTime
-      const currentDate = getCurrentDate()
-      return await supabaseService.canCreateNotebookTrial(user.id, currentDate)
-    } catch (error) {
-      console.error('Error checking notebook creation limit:', error)
-      return false
-    }
-  }, [subscription.tier, user?.id, getCurrentDate])
-
-  const canAddWords = useCallback(async (): Promise<boolean> => {
-    // Premium users can always add words
-    if (['weekly', 'monthly', 'yearly'].includes(subscription.tier)) {
-      console.log(`🔍 canAddWords: Premium user (${subscription.tier}) - access granted`)
-      return true
-    }
-    if (!user?.id) {
-      console.log(`🔍 canAddWords: No user ID - access denied`)
-      return false
-    }
-
-    try {
-      // Trial users can add words during trial, post-trial users cannot - pass DevTime
-      const currentDate = getCurrentDate()
-      const userState = getUserState()
-      
-      console.log(`🔍 canAddWords: Starting comprehensive check...`)
-      console.log(`🔍 canAddWords: User State = ${userState}`)
-      console.log(`🔍 canAddWords: Local subscription state:`)
-      console.log(`   - tier: ${subscription.tier}`)
-      console.log(`   - isInTrial: ${subscription.isInTrial}`)
-      console.log(`   - isActive: ${subscription.isActive}`)
-      console.log(`   - trialStartedAt: ${subscription.trialStartedAt?.toISOString()}`)
-      console.log(`   - trialDaysRemaining: ${subscription.trialDaysRemaining}`)
-      console.log(`🔍 canAddWords: DevTime currentDate: ${currentDate.toISOString()}`)
-      console.log(`🔍 canAddWords: Real date: ${new Date().toISOString()}`)
-      
-      // Also check if user is actually in trial period using database
-      const isInTrialDB = await supabaseService.isInTrialPeriod(user.id, currentDate)
-      console.log(`🔍 canAddWords: Database trial check: ${isInTrialDB}`)
-      
-      const result = await supabaseService.canAddWordsTrial(user.id, currentDate)
-      console.log(`🔍 canAddWords: Database canAddWords result: ${result}`)
-      console.log(`🔍 canAddWords: Final decision: ${result}`)
-      
-      return result
-    } catch (error) {
-      console.error('🔍 canAddWords: Error during check:', error)
-      return false
-    }
-  }, [subscription.tier, subscription.isInTrial, subscription.isActive, subscription.trialStartedAt, subscription.trialDaysRemaining, user?.id, getCurrentDate, getUserState])
-
-  // Debug function for development testing
-  const debugTrialStatus = useCallback(async (): Promise<any> => {
-    if (!user?.id) return null
-    
-    try {
-      const currentDate = getCurrentDate()
-      console.log(`🔍 DEBUG: Starting trial debug for user ${user.id}`)
-      
-      const debugResult = await supabaseService.debugTrialStatus(user.id, currentDate)
-      console.log(`🔍 DEBUG: Complete trial status:`, debugResult)
-      
-      return debugResult
-    } catch (error) {
-      console.error('🔍 DEBUG: Error debugging trial status:', error)
-      return null
-    }
-  }, [user?.id, getCurrentDate])
-
-  const hasFeature = useCallback((feature: string): boolean => {
-    // Premium users have all features
-    if (['weekly', 'monthly', 'yearly'].includes(subscription.tier)) return true
-    
-    // Trial users have all features except multiple notebooks
-    if (subscription.isInTrial) {
-      const trialRestrictedFeatures = ['multiple_notebooks']
-      return !trialRestrictedFeatures.includes(feature)
-    }
-    
-    // Post-trial/free users only have review features
-    const postTrialFeatures = [
-      'basic_reviews',
-      'basic_statistics',
-      'archive_system'
-    ]
-    
-    return postTrialFeatures.includes(feature)
-  }, [subscription.tier, subscription.isInTrial])
-
-  // User state helper functions
-  const getUserState = useCallback((): UserState => {
-    // Premium users (paid subscriptions)
-    if (['weekly', 'monthly', 'yearly'].includes(subscription.tier)) return 'premium'
-    
-    // Trial users (actively in trial period)
-    if (subscription.isInTrial) return 'trial'
-    
-    // Post-trial users (trial ended but not premium)
-    if (subscription.trialStartedAt) return 'post-trial'
-    
-    // Pre-trial users (never started trial)
-    return 'pre-trial'
-  }, [subscription.tier, subscription.isInTrial, subscription.trialStartedAt])
-
-  const canExitPaywall = useCallback((): boolean => {
-    const userState = getUserState()
-    
-    // Pre-trial users cannot exit paywall (forced trial)
-    if (userState === 'pre-trial') return false
-    
-    // All other states can exit paywall
-    return true
-  }, [getUserState])
-
-  // UI helper messages
-  const getUpgradeMessage = useCallback((context: string): string => {
-    // Different messages based on trial status
-    if (subscription.isInTrial) {
-      const trialMessages = {
-        'notebook_limit': 'Upgrade to create multiple notebooks and learn different languages',
-        'general': `Upgrade to unlock unlimited learning (${subscription.trialDaysRemaining} days left in trial)`
-      }
-      return trialMessages[context] || trialMessages['general']
-    }
-    
-    const postTrialMessages = {
-      'add_words': 'Your trial has ended. Upgrade to continue adding new vocabulary',
-      'notebook_limit': 'Upgrade to create new notebooks and learn new vocabulary',
-      'general': 'Upgrade to continue your vocabulary learning journey'
-    }
-    
-    return postTrialMessages[context] || postTrialMessages['general']
-  }, [subscription.isInTrial, subscription.trialDaysRemaining])
-
-  // Show paywall modal using router navigation with mount safety and debouncing
-  const showPaywallModal = useCallback(() => {
-    const now = Date.now()
-    const timeSinceLastNavigation = now - lastPaywallNavigationTime.current
-    
-    // Debounce: prevent multiple paywall navigations within 2 seconds
-    if (timeSinceLastNavigation < 2000) {
-      console.log(`🚫 Paywall navigation debounced (${timeSinceLastNavigation}ms since last attempt)`)
-      return
-    }
-    
-    // Check if navigation is safe to perform
-    const checkNavigationReady = () => {
-      try {
-        // Test navigation readiness by checking router state
-        if (!router || typeof router.push !== 'function') {
-          return false
-        }
-        return true
-      } catch {
-        return false
-      }
-    }
-    
-    // Update last navigation time
-    lastPaywallNavigationTime.current = now
-    console.log(`📱 Navigating to paywall at ${new Date(now).toISOString()}`)
-    
-    // Add a larger delay to ensure router is fully mounted
-    setTimeout(() => {
-      if (!checkNavigationReady()) {
-        console.warn('Router not ready, skipping paywall navigation')
-        lastPaywallNavigationTime.current = 0
-        return
-      }
-      
-      try {
-        router.push('/paywall')
-      } catch (error) {
-        console.warn('Navigation failed, router not ready:', error)
-        // Reset navigation time on failure to allow retry
-        lastPaywallNavigationTime.current = 0
-        // Retry after a longer delay with additional safety check
-        setTimeout(() => {
-          if (!checkNavigationReady()) {
-            console.warn('Router still not ready, canceling paywall navigation')
-            return
-          }
-          
-          try {
-            router.push('/paywall')
-            lastPaywallNavigationTime.current = Date.now()
-          } catch (retryError) {
-            console.error('Navigation failed after retry:', retryError)
-            lastPaywallNavigationTime.current = 0
-          }
-        }, 3000) // Increased delay
-      }
-    }, 500) // Increased initial delay
-  }, [router])
+  // Removed: All feature check functions and UI helpers (hard paywall model)
 
   const contextValue: SubscriptionContextType = {
     subscription,
     plans: SUBSCRIPTION_PLANS,
     isLoading,
     
-    startFreeTrial,
-    activateSubscription,
-    cancelSubscription,
-    restoreSubscription,
+    // RevenueCat state
+    offerings,
+    currentOffering,
+    customerInfo,
     
-    canCreateNotebook,
-    canAddWords,
-    hasFeature,
-    
-    getUserState,
-    canExitPaywall,
-    
-    getUpgradeMessage,
-    showPaywallModal,
-    showPaywall,
-    setShowPaywall,
-    
-    debugTrialStatus
+    // RevenueCat methods
+    purchasePackage,
+    restorePurchases,
+    initializeRevenueCat,
+    syncWithRevenueCat
   }
 
   return (
@@ -727,13 +739,7 @@ export function useSubscription() {
   return context
 }
 
-// Hook for easy feature checking
-export function useFeature(feature: string) {
-  const { hasFeature } = useSubscription()
-  return hasFeature(feature)
-}
-
-// Hook for premium status
+// Hook for premium status (simplified for hard paywall)
 export function usePremium() {
   const { subscription } = useSubscription()
   return subscription.isActive

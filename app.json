@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.recepsienen.goldlist",
+      "bundleIdentifier": "com.recepsienen.goldlist-method",
       "appleTeamId": "3WL9FYSV99",
       "entitlements": {
         "com.apple.developer.applesignin": [
@@ -29,7 +29,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.recepsienen.goldlistmethod"
     },
     "web": {
       "output": "static",

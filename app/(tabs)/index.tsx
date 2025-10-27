@@ -21,7 +21,6 @@ import {
 import CountryFlag from 'react-native-country-flag'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 // Removed unused badge imports
-import { DevTimeDisplay } from '@/components/DevTimeDisplay'
 import { LoadingIndicator } from '@/components/LoadingIndicator'
 import { SharedHeader } from '@/components/shared-header'
 import { RADIUS, SHADOWS, SPACING, TYPOGRAPHY } from '@/lib/constants/design'
@@ -29,7 +28,6 @@ import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useRouteProtection } from '@/lib/hooks/useRouteProtection'
-import { isDeveloperAccount } from '@/lib/utils/devAccess'
 import { getCountryCodeFromLanguage } from '@/lib/utils/flagUtils'
 import MaterialIcons from '@expo/vector-icons/MaterialIcons'
 
@@ -40,7 +38,7 @@ export default function HomeScreen() {
   const { appState, refreshNotebooks, updateNotebookLastUsed, addEventListener, emitEvent } = useApp()
   const { colors, isDark } = useTheme()
   const { registerDayChangeCallback, currentSimulatedDay, getCurrentDate } = useDevTime()
-  const { subscription, showPaywallModal, getUserState, isLoading: subscriptionLoading } = useSubscription()
+  const { subscription, showPaywallModal, isLoading: subscriptionLoading } = useSubscription()
   const { protectedNavigateToAddWords } = useRouteProtection()
   
   // ✨ OPTIMISTIC UPDATES: Primary data source for instant UI updates
@@ -374,15 +372,6 @@ export default function HomeScreen() {
 
   // Removed unused handleBadgePress function
 
-  const handleResetData = async () => {
-    try {
-      // await supabaseService.resetUserData() // Method doesn't exist
-      await refreshNotebooks()
-      await loadProgressData()
-    } catch (error) {
-      console.error('Error resetting data:', error)
-    }
-  }
 
   // Per-notebook review state - more accurate than global detection
   const [notebookReviews, setNotebookReviews] = useState<Map<string, { hasReviews: boolean; pageNumber?: number }>>(new Map())
@@ -1222,18 +1211,6 @@ export default function HomeScreen() {
         {/* Trial Countdown Banner */}
         {renderTrialCountdown()}
         
-        {/* Development Reset Button - Only for developer account */}
-        {isDeveloperAccount(profile?.email || '') && (
-          <TouchableOpacity 
-            style={styles.resetButton}
-            onPress={handleResetData}
-          >
-            <Text style={styles.resetButtonText}>🔄 Reset All Data (Dev Only)</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Development Time Simulation - Only for developer account */}
-        {isDeveloperAccount(profile?.email || '') && <DevTimeDisplay />}
 
         {/* Status Bar */}
         {renderStatusBar()}
@@ -1246,7 +1223,7 @@ export default function HomeScreen() {
             <Text style={styles.emptyStateIcon}>📚</Text>
             <Text style={styles.emptyStateTitle}>Welcome to Gold List!</Text>
             <Text style={styles.emptyStateSubtitle}>
-              Create your first vocabulary notebook to start learning with the scientifically-proven Gold List Method.
+              Create your first vocabulary notebook to start learning with the Gold List Method.
             </Text>
             <TouchableOpacity 
               style={styles.createFirstNotebookButton}

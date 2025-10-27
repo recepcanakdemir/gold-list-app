@@ -1369,7 +1369,7 @@ export default function HomeScreen() {
             <Text style={styles.emptyStateIcon}>📚</Text>
             <Text style={styles.emptyStateTitle}>Welcome to Gold List!</Text>
             <Text style={styles.emptyStateSubtitle}>
-              Create your first vocabulary notebook to start learning with the scientifically-proven Gold List Method.
+              Create your first vocabulary notebook to start learning with the Gold List Method.
             </Text>
             <TouchableOpacity 
               style={styles.createFirstNotebookButton}

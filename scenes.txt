@@ -1,0 +1,44 @@
+Senaryolar:
+
+Pre-trial user
+onboarding : false = complete onboarding -> signin -> paywall -> app
+
+onboarding : true  //Bu olamaz, giriş yapmamış yeni kullanıcılar hep onboardingi görür. 
+
+
+Trial user
+
+onboarding : false  // kullanıcı trial aldıysa zaten onboardingi tamamlamıştır. bir daha
+onboarding göstermeye gerek yok
+
+onboarding : true // direkt app açılır, paywall gerekli yerlerde gösterilir, başlangıçta gösterilmez.
+Bu zaten impelemente edilmiş. Girişte paywall yok. Eğer kullanıcı settings den abone olmak isterse
+görebilir, ya da premium olan (2. notebooku oluşturmak premium free trial da da) özelliklere
+erişmek isterse zaten paywall çıkıyor. 
+
+Subscribed user
+
+onboarding : false // bu da olamaz, user aboneliğe kadar geldiyse onboarding zaten tamamlanmıştır.
+Bir daha paywall ve onboarding gösterilmez. Eğer kullanıcı planını değiştirecekse settingsten yapabilir.
+
+onboarding : true // Kullanıcı uygulamaya direkt girer.
+
+
+Eğer kullanıcı abone ise ve yeni cihazdaysa ya da indirip sildiyse, o zaman ne yapmalı? 
+Tekrar onboarding göstermek istemiyorum, kullanıcıya erken giriş yapıp atlayabilmesini 
+istiyorum.
+
+
+post-trial user
+
+onboarding : false // post trial ise zaten onboardingi tammamlamıi trialı bitirmiş, bir daha gösterilmez.
+Uygulamaya her girişte de paywall gösterilmez, settingsden planlara erişebilir ya da premium özellikleri
+denemek istediğinde zaten paywall çıkıyor
+onboarding : true // aynı durum, direkt appe geçer, paywall girişte gösterilmez. 
+
+
+
+Kafamı karıştıran durumlar şunlar: 
+Biz kullanıcıya erken sign in imkanı vermiyoruz, o zaman kullanıncının onboaridingi 
+tamamlayıp tamamlamadığını nasıl kontrol edeceğiz onboardingin başında?
+

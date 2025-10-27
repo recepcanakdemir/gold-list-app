@@ -12,6 +12,8 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ScrollView,
+  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
@@ -19,24 +21,35 @@ export default function PaywallPage() {
   const router = useRouter()
   const { colors } = useTheme()
   const { profile } = useAuth()
-  const { plans, activateSubscription, startFreeTrial, getUserState, canExitPaywall, subscription } = useSubscription()
-  const [selectedPlan, setSelectedPlan] = useState('weekly') // Default to weekly since trial is enabled by default
+  const { 
+    plans, 
+    purchasePackage,
+    restorePurchases,
+    offerings,
+    currentOffering,
+    subscription 
+  } = useSubscription()
+  const [selectedPlan, setSelectedPlan] = useState('weekly')
   const [loading, setLoading] = useState(false)
-  const [trialLoading, setTrialLoading] = useState(false)
   
-  const userState = getUserState()
-  const isExitable = canExitPaywall()
-  
-  // Only pre-trial users should see and be able to use free trial
-  const canUseTrial = userState === 'pre-trial'
-  const [enableFreeTrial, setEnableFreeTrial] = useState(canUseTrial)
-
   const styles = createStyles(colors)
 
   const handlePurchase = async () => {
     setLoading(true)
     try {
-      const success = await activateSubscription(selectedPlan as any)
+      // Find the package based on selected plan
+      let packageId = selectedPlan
+      if (currentOffering) {
+        const packages = currentOffering.availablePackages
+        const packageMap = {
+          'weekly': packages.find(p => p.identifier === '$rc_weekly')?.identifier,
+          'monthly': packages.find(p => p.identifier === '$rc_monthly')?.identifier,
+          'yearly': packages.find(p => p.identifier === '$rc_annual')?.identifier,
+        }
+        packageId = packageMap[selectedPlan] || selectedPlan
+      }
+
+      const success = await purchasePackage(packageId)
       if (success) {
         const redirectTarget = profile?.onboarding_completed ? '/(tabs)' : '/(onboarding)/completion'
         Alert.alert(
@@ -47,294 +60,180 @@ export default function PaywallPage() {
       } else {
         Alert.alert('Error', 'Failed to activate subscription. Please try again.')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Purchase error:', error)
-      Alert.alert('Error', 'An error occurred. Please try again.')
+      
+      if (error?.message?.includes('cancelled') || error?.message?.includes('user_cancelled')) {
+        console.log('User cancelled purchase')
+      } else if (error?.message?.includes('network') || error?.message?.includes('connection')) {
+        Alert.alert('Network Error', 'Please check your internet connection and try again.')
+      } else {
+        Alert.alert('Purchase Failed', 'Unable to complete purchase. Please try again or contact support.')
+      }
     } finally {
       setLoading(false)
     }
   }
 
-  const handleStartTrial = async () => {
-    setTrialLoading(true)
+  const handleRestore = async () => {
+    setLoading(true)
     try {
-      const success = await startFreeTrial()
+      const success = await restorePurchases()
       if (success) {
-        const redirectTarget = profile?.onboarding_completed ? '/(tabs)' : '/(onboarding)/completion'
-        Alert.alert(
-          '🎉 Trial Started!',
-          'You now have 14 days of full access to all premium features. Start learning with unlimited vocabulary!',
-          [{ text: 'Start Learning', onPress: () => router.replace(redirectTarget) }]
-        )
-        // Keep trialLoading true until navigation - prevents X button from reappearing
+        Alert.alert('Success', 'Your purchases have been restored!')
+        router.replace('/(tabs)')
       } else {
-        Alert.alert('Error', 'Failed to start trial. Please try again.')
-        setTrialLoading(false) // Only reset on failure
+        Alert.alert('No Purchases Found', 'No previous purchases were found for this account.')
       }
     } catch (error) {
-      console.error('Trial start error:', error)
-      Alert.alert('Error', 'An error occurred. Please try again.')
-      setTrialLoading(false) // Only reset on error
+      console.error('Restore error:', error)
+      Alert.alert('Restore Failed', 'Unable to restore purchases. Please try again.')
+    } finally {
+      setLoading(false)
     }
   }
 
 
-  const handleBack = () => {
-    // Only allow back navigation if paywall is exitable
-    if (isExitable) {
-      if (router.canGoBack()) {
-        router.back()
-      } else {
-        router.replace('/(tabs)/dashboard')
-      }
-    } else {
-      // For pre-trial users, show alert explaining they need to start trial
-      Alert.alert(
-        'Welcome to Gold List!',
-        'To get started, please begin your free trial or subscribe to premium.',
-        [{ text: 'OK' }]
-      )
-    }
+  const openPrivacyPolicy = () => {
+    Linking.openURL('https://your-privacy-policy-url.com')
   }
 
-  const handleRestore = () => {
-    // Mock restore functionality
-    Alert.alert('Restore Purchases', 'No previous purchases found to restore.')
+  const openTermsOfService = () => {
+    Linking.openURL('https://your-terms-url.com')
   }
 
-  const handleTermsPress = () => {
-    Linking.openURL('https://goldlistmethod.app/terms')
-  }
-
-  const handlePrivacyPress = () => {
-    Linking.openURL('https://goldlistmethod.app/privacy')
-  }
-
-  const getCurrentPlan = () => plans.find(p => p.id === selectedPlan)
-
-  // Handle toggle changes (only for pre-trial users)
-  const handleTrialToggle = (enabled: boolean) => {
-    // Only allow toggle changes for pre-trial users
-    if (!canUseTrial) return
-    
-    setEnableFreeTrial(enabled)
-    if (enabled) {
-      // Auto-select weekly plan when trial is enabled
-      setSelectedPlan('weekly')
-    }
-    // Don't change plan when disabling toggle - let user keep their selection
-  }
-
-  // Handle plan selection
-  const handlePlanSelection = (planId: string) => {
-    setSelectedPlan(planId)
-    // If toggle is enabled and user selects non-weekly plan, disable toggle
-    if (enableFreeTrial && planId !== 'weekly') {
-      setEnableFreeTrial(false)
-    }
-  }
+  const features = [
+    'Unlimited notebooks for all languages',
+    'AI-powered sentence generation',
+    'Advanced learning analytics',
+    'Cloud sync across all devices',
+    'Unlimited vocabulary words'
+  ]
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        
-        {/* Compact Header */}
-        <View style={styles.header}>
-          {isExitable && !trialLoading && !loading && (
-            <TouchableOpacity style={styles.closeButton} onPress={handleBack}>
-              <Ionicons name="close" size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
-          )}
-          
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient
+        colors={[colors.primary + '20', colors.background]}
+        style={styles.gradientBackground}
+      >
+        {/* Decorative Background Elements */}
+        <View style={styles.decorativeContainer}>
+          <View style={[styles.decorativeElement, styles.decorativeElement1, { backgroundColor: colors.primary + '15' }]}>
+            <Ionicons name="book-outline" size={20} color={colors.primary + '40'} />
+          </View>
+          <View style={[styles.decorativeElement, styles.decorativeElement2, { backgroundColor: colors.primary + '10' }]}>
+            <Ionicons name="bulb-outline" size={16} color={colors.primary + '30'} />
+          </View>
+          <View style={[styles.decorativeElement, styles.decorativeElement3, { backgroundColor: colors.primary + '12' }]}>
+            <Ionicons name="trophy-outline" size={18} color={colors.primary + '35'} />
+          </View>
+        </View>
+
+        <View style={styles.content}>
+          {/* Hero Section */}
           <View style={styles.heroSection}>
-            <View style={styles.heroIcon}>
-              <Ionicons name="trophy" size={24} color={colors.primary} />
+            <View style={styles.iconContainer}>
+              <Image 
+                source={require('@/images/gold_list_icon.png')} 
+                style={styles.appIcon}
+                resizeMode="contain"
+              />
             </View>
-            <Text style={styles.heroTitle}>Gold List Premium</Text>
-            <Text style={styles.heroSubtitle}>Unlock unlimited vocabulary learning</Text>
+            <Text style={[styles.title, { color: colors.text }]}>
+              Gold List Premium
+            </Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Unlock unlimited language learning
+            </Text>
           </View>
-        </View>
 
-        {/* Features Grid - Compact 2x3 */}
-        <View style={styles.featuresGrid}>
-          <View style={styles.featureItem}>
-            <Ionicons name="infinite" size={16} color={colors.primary} />
-            <Text style={styles.featureText}>Unlimited Notebooks</Text>
+          {/* Features List */}
+          <View style={styles.featuresContainer}>
+            {features.map((feature, index) => (
+              <View key={index} style={styles.featureItem}>
+                <Text style={[styles.bulletPoint, { color: colors.primary }]}>•</Text>
+                <Text style={[styles.featureText, { color: colors.text }]}>
+                  {feature}
+                </Text>
+              </View>
+            ))}
           </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="bulb-outline" size={16} color={colors.primary} />
-            <Text style={styles.featureText}>AI Examples</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="analytics-outline" size={16} color={colors.primary} />
-            <Text style={styles.featureText}>Analytics</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="cloud-outline" size={16} color={colors.primary} />
-            <Text style={styles.featureText}>Cloud Sync</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="time-outline" size={16} color={colors.primary} />
-            <Text style={styles.featureText}>Spaced Repetition</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="trending-up-outline" size={16} color={colors.primary} />
-            <Text style={styles.featureText}>Progress Tracking</Text>
-          </View>
-        </View>
 
-        {/* Compact Pricing Plans */}
-        <View style={styles.pricingSection}>
-          <Text style={styles.sectionTitle}>Choose Your Plan</Text>
-          
+          {/* Pricing Plans */}
           <View style={styles.plansContainer}>
-            {plans.map((plan) => {
-              const isSelected = selectedPlan === plan.id
-              const isPopular = plan.id === 'monthly'
-              
-              return (
+            <View style={styles.plansRow}>
+              {plans.filter(plan => plan.id !== 'free').map((plan, index) => (
                 <TouchableOpacity
                   key={plan.id}
                   style={[
-                    styles.planCard,
-                    isSelected && styles.planCardSelected
+                    styles.planItem,
+                    { 
+                      backgroundColor: colors.surface,
+                      borderColor: selectedPlan === plan.id ? colors.primary : '#000000'
+                    },
+                    selectedPlan === plan.id && styles.selectedPlan // Selected plan is bigger
                   ]}
-                  onPress={() => handlePlanSelection(plan.id)}
+                  onPress={() => setSelectedPlan(plan.id)}
                 >
-                  {isPopular && (
-                    <View style={styles.popularBadge}>
-                      <Text style={styles.popularBadgeText}>POPULAR</Text>
+                  {index === 1 && (
+                    <View style={[styles.popularBadge, { backgroundColor: colors.primary }]}>
+                      <Text style={styles.popularText} numberOfLines={1}>POPULAR</Text>
                     </View>
                   )}
-                  
-                  <View style={styles.planContent}>
-                    <Text style={styles.planName}>{plan.name}</Text>
-                    <Text style={styles.planPrice}>{plan.price}</Text>
-                    <Text style={styles.planDuration}>{plan.duration}</Text>
-                    {plan.savings && (
-                      <Text style={styles.planSavings}>{plan.savings}</Text>
-                    )}
-                  </View>
-                  
-                  {isSelected && (
-                    <View style={styles.selectedIndicator}>
-                      <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
-                    </View>
+                  <Text style={[styles.planDuration, { color: colors.textSecondary }]}>
+                    {plan.name}
+                  </Text>
+                  <Text style={[styles.planPrice, { color: colors.text }]}>
+                    {plan.price}
+                  </Text>
+                  <Text style={[styles.planSubtext, { color: colors.textSecondary }]}>
+                    {plan.duration}
+                  </Text>
+                  {plan.savings && (
+                    <Text style={[styles.savingsText, { color: colors.success }]}>
+                      {plan.savings}
+                    </Text>
                   )}
                 </TouchableOpacity>
-              )
-            })}
+              ))}
+            </View>
           </View>
-        </View>
 
-        {/* Auto-renewable Notice */}
-        <View style={styles.autoRenewableNotice}>
-          <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
-          <Text style={styles.autoRenewableText}>Auto-renewable until canceled</Text>
-        </View>
-
-        {/* Free Trial Toggle - Only show for pre-trial users */}
-        {canUseTrial && (
-          <View style={styles.trialToggleSection}>
-          <TouchableOpacity 
-            style={styles.toggleContainer}
-            onPress={() => handleTrialToggle(!enableFreeTrial)}
-          >
-            <View style={styles.toggleInfo}>
-              <Text style={styles.toggleTitle}>Enable 14-day free trial</Text>
-              <Text style={styles.toggleSubtitle}>
-                {enableFreeTrial ? 'Selecting weekly plan for trial access' : 'Choose any plan for direct subscription'}
+          {/* Primary Action Button */}
+          <View style={styles.actionContainer}>
+            <TouchableOpacity
+              style={[styles.primaryButton, { backgroundColor: colors.primary }]}
+              onPress={handlePurchase}
+              disabled={loading}
+            >
+              <Text style={[styles.primaryButtonText, { color: colors.background }]}>
+                {loading ? 'Processing...' : `Start Premium - ${plans.find(p => p.id === selectedPlan)?.price || '$4.99'}`}
               </Text>
-            </View>
-            <View style={[styles.toggle, enableFreeTrial && styles.toggleActive]}>
-              <View style={[styles.toggleDot, enableFreeTrial && styles.toggleDotActive]} />
-            </View>
-          </TouchableOpacity>
-          
-          {/* Trial-specific information when toggle is enabled */}
-          {enableFreeTrial && (
-            <View style={styles.trialInfo}>
-              <View style={styles.trialInfoRow}>
-                <Ionicons name="warning-outline" size={14} color={colors.primary} />
-                <Text style={styles.trialInfoText}>You can only create 1 notebook in free trial</Text>
-              </View>
-              <View style={styles.trialInfoRow}>
-                <Ionicons name="time-outline" size={14} color={colors.primary} />
-                <Text style={styles.trialInfoText}>14 days free then {plans.find(p => p.id === 'weekly')?.price || '$4.99'} per week</Text>
-              </View>
-            </View>
-          )}
+            </TouchableOpacity>
           </View>
-        )}
 
-        {/* User State Information - Show for non-pre-trial users */}
-        {!canUseTrial && (
-          <View style={styles.userStateInfo}>
-            <View style={styles.userStateContainer}>
-              <Ionicons 
-                name={
-                  userState === 'trial' ? 'time-outline' : 
-                  userState === 'post-trial' ? 'checkmark-circle-outline' : 
-                  'diamond-outline'
-                } 
-                size={16} 
-                color={colors.primary} 
-              />
-              <Text style={styles.userStateText}>
-                {userState === 'trial' && `Trial Active (${subscription.trialDaysRemaining} days remaining)`}
-                {userState === 'post-trial' && 'Trial completed - Upgrade to continue learning'}
-                {userState === 'premium' && `Premium Active (${subscription.tier})`}
+          {/* Legal Links */}
+          <View style={styles.legalContainer}>
+            <TouchableOpacity onPress={openTermsOfService}>
+              <Text style={[styles.legalText, { color: colors.textSecondary }]}>
+                Terms of Use
               </Text>
-            </View>
-          </View>
-        )}
-
-        {/* Compact CTA */}
-        <TouchableOpacity
-          style={[styles.ctaButton, (loading || trialLoading) && styles.ctaButtonDisabled]}
-          onPress={
-            (userState === 'pre-trial' && enableFreeTrial) ? 
-              handleStartTrial : 
-              handlePurchase
-          }
-          disabled={loading || trialLoading}
-        >
-          <LinearGradient
-            colors={[colors.primary, colors.primary + 'DD']}
-            style={styles.ctaGradient}
-          >
-            <Text style={styles.ctaText}>
-              {loading || trialLoading ? 'Starting...' : 
-                (userState === 'pre-trial' && enableFreeTrial) ? 
-                  'Start 14-Day Free Trial' : 
-                  `Subscribe ${getCurrentPlan()?.name}`}
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
-
-        {/* Trial Banner only when trial is enabled for pre-trial users */}
-        {userState === 'pre-trial' && enableFreeTrial && (
-          <Text style={styles.trialNote}>
-            Free trial • Cancel anytime • No commitment
-          </Text>
-        )}
-
-        {/* Compact Footer */}
-        <View style={styles.footer}>
-          <View style={styles.footerRow}>
-            <TouchableOpacity onPress={handleRestore}>
-              <Text style={styles.restoreText}>Restore</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleTermsPress}>
-              <Text style={styles.legalLink}>Terms</Text>
+            <Text style={[styles.legalSeparator, { color: colors.textSecondary }]}> • </Text>
+            <TouchableOpacity onPress={handleRestore} disabled={loading}>
+              <Text style={[styles.legalText, { color: colors.textSecondary }]}>
+                Restore Purchase
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handlePrivacyPress}>
-              <Text style={styles.legalLink}>Privacy</Text>
+            <Text style={[styles.legalSeparator, { color: colors.textSecondary }]}> • </Text>
+            <TouchableOpacity onPress={openPrivacyPolicy}>
+              <Text style={[styles.legalText, { color: colors.textSecondary }]}>
+                Privacy Policy
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
-        
-      </View>
+      </LinearGradient>
     </SafeAreaView>
   )
 }
@@ -342,322 +241,181 @@ export default function PaywallPage() {
 const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+  },
+  gradientBackground: {
+    flex: 1,
   },
   content: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 20,
+    paddingHorizontal: 24,
     justifyContent: 'space-between',
-  },
-
-  // Compact Header
-  header: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  closeButton: {
-    alignSelf: 'flex-end',
-    padding: 6,
-    marginBottom: 8,
   },
   heroSection: {
     alignItems: 'center',
+    paddingVertical: 40,
   },
-  heroIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.primary + '15',
-    justifyContent: 'center',
+  iconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: colors.primary + '20',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'center',
+    marginBottom: 16,
   },
-  heroTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: colors.textPrimary,
+  appIcon: {
+    width: 70,
+    height: 70,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 6,
+    marginBottom: 8,
+    lineHeight: 32,
   },
-  heroSubtitle: {
-    fontSize: 14,
-    color: colors.textSecondary,
+  subtitle: {
+    fontSize: 16,
     textAlign: 'center',
+    lineHeight: 20,
   },
-
-  // Features Grid - 2x3 compact layout
-  featuresGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-    gap: 12,
+  featuresContainer: {
+    marginVertical: 30,
+    alignItems: 'center',
   },
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: '48%',
-    backgroundColor: colors.cardBackground,
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
+    marginBottom: 8,
+    paddingHorizontal: 20,
+  },
+  bulletPoint: {
+    fontSize: 16,
+    marginRight: 12,
+    fontWeight: 'bold',
   },
   featureText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginLeft: 8,
-    flex: 1,
-  },
-
-  // Trial Toggle Section
-  trialToggleSection: {
-    marginBottom: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: colors.cardBackground,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  toggleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  toggleInfo: {
-    flex: 1,
-    marginRight: 16,
-  },
-  toggleTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  toggleSubtitle: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    lineHeight: 16,
-  },
-  toggle: {
-    width: 44,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.border,
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-  },
-  toggleActive: {
-    backgroundColor: colors.primary,
-  },
-  toggleDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'white',
-    alignSelf: 'flex-start',
-  },
-  toggleDotActive: {
-    alignSelf: 'flex-end',
-  },
-  trialInfo: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    gap: 8,
-  },
-  trialInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  trialInfoText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    flex: 1,
-    lineHeight: 16,
-  },
-
-  // Auto-renewable Notice
-  autoRenewableNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    marginBottom: 12,
-    paddingVertical: 8,
-  },
-  autoRenewableText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    fontStyle: 'italic',
-  },
-
-  // Pricing Section
-  pricingSection: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: 16,
-    textAlign: 'center',
+    fontSize: 16,
+    lineHeight: 22,
   },
   plansContainer: {
+    marginVertical: 20,
+  },
+  plansRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 12,
+    paddingHorizontal: 8,
   },
-  planCard: {
+  planItem: {
     flex: 1,
-    backgroundColor: colors.cardBackground,
+    alignItems: 'center',
+    padding: 16,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: colors.border,
-    padding: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
     position: 'relative',
-    aspectRatio: 1,
-    minHeight: 100,
   },
-  planCardSelected: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + '05',
+  selectedPlan: {
+    transform: [{ scale: 1.1 }],
+    borderWidth: 3,
   },
   popularBadge: {
     position: 'absolute',
-    top: -6,
-    left: 8,
-    right: 8,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  popularBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: 'white',
-    letterSpacing: 0.5,
-  },
-  planContent: {
+    top: -8,
+    paddingHorizontal: 24,
+    paddingVertical: 4,
+    borderRadius: 12,
+    minWidth: 100,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  planName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  planPrice: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.primary,
+  popularText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
     textAlign: 'center',
   },
   planDuration: {
-    fontSize: 11,
-    fontWeight: '400',
-    color: colors.textSecondary,
-    marginTop: 2,
+    fontSize: 14,
     textAlign: 'center',
+    marginBottom: 4,
   },
-  planSavings: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#FF6B35',
+  savingsText: {
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
     marginTop: 4,
+  },
+  planPrice: {
+    fontSize: 18,
+    fontWeight: 'bold',
     textAlign: 'center',
-    backgroundColor: '#FF6B35' + '15',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    overflow: 'hidden',
+    marginBottom: 2,
   },
-  selectedIndicator: {
+  planSubtext: {
+    fontSize: 11,
+    textAlign: 'center',
+  },
+  actionContainer: {
+    marginVertical: 30,
+  },
+  primaryButton: {
+    paddingVertical: 18,
+    borderRadius: 25,
+    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  primaryButtonText: {
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  decorativeContainer: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    pointerEvents: 'none',
   },
-
-  // CTA Button
-  ctaButton: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  ctaButtonDisabled: {
-    opacity: 0.7,
-  },
-  ctaGradient: {
-    paddingVertical: 16,
-    paddingHorizontal: 24,
+  decorativeElement: {
+    position: 'absolute',
+    borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ctaText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: 'white',
+  decorativeElement1: {
+    width: 50,
+    height: 50,
+    top: 60,
+    right: 30,
   },
-  trialNote: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    fontStyle: 'italic',
-    marginBottom: 12,
+  decorativeElement2: {
+    width: 40,
+    height: 40,
+    top: 180,
+    left: 20,
   },
-
-  // Compact Footer
-  footer: {
-    alignItems: 'center',
+  decorativeElement3: {
+    width: 45,
+    height: 45,
+    bottom: 120,
+    right: 40,
   },
-  footerRow: {
+  legalContainer: {
     flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 20,
+    paddingBottom: 20,
+    flexWrap: 'wrap',
   },
-  restoreText: {
-    fontSize: 13,
-    color: colors.primary,
-    fontWeight: '500',
-  },
-  legalLink: {
-    fontSize: 12,
-    color: colors.textSecondary,
+  legalText: {
+    fontSize: 14,
     textDecorationLine: 'underline',
   },
-
-  // User State Information Section
-  userStateInfo: {
-    marginBottom: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: colors.cardBackground,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  userStateContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  userStateText: {
+  legalSeparator: {
     fontSize: 14,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    flex: 1,
-    lineHeight: 18,
   },
 })

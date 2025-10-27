@@ -59,22 +59,6 @@ export function SharedHeader({
       </View>
       
       <View style={styles.headerRight}>
-        {/* Subscription Status Badge */}
-        <TouchableOpacity 
-          style={[
-            styles.subscriptionBadge,
-            subscription.isActive ? styles.premiumBadge : styles.freeBadge
-          ]}
-          onPress={() => !subscription.isActive && showPaywallModal()}
-        >
-          <Text style={[
-            styles.subscriptionText,
-            subscription.isActive ? styles.premiumText : styles.freeText
-          ]}>
-            {subscription.isActive ? '✨ Premium' : 'Free'}
-          </Text>
-        </TouchableOpacity>
-        
         <View style={styles.streakContainer}>
           <Text style={styles.streakIcon}>🔥</Text>
           <Text style={styles.streakCount}>{currentStreak}</Text>

@@ -16,7 +16,6 @@ import { supabaseService } from '@/lib/services/supabaseService'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS, FLAG_EMOJIS } from '@/lib/constants/design'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
-import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { SharedHeader } from '@/components/shared-header'
 import { BottomNav } from '@/components/bottom-nav'
 import { useRouteProtection } from '@/lib/hooks/useRouteProtection'
@@ -48,8 +47,7 @@ export default function NotebookDetailsScreen() {
   }>()
   const { colors } = useTheme()
   const { getCurrentDate } = useDevTime()
-  const { subscription, setShowPaywall } = useSubscription()
-  const { protectedNavigateToAddWords } = useRouteProtection()
+  const { navigateToAddWords } = useRouteProtection()
   const [notebook, setNotebook] = useState<any>(null)
   const [pages, setPages] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -523,14 +521,14 @@ export default function NotebookDetailsScreen() {
     // Check if this is a virtual page and handle accordingly
     if (page.id.startsWith('virtual-')) {
       // For virtual pages, use protected navigation to create the actual page
-      await protectedNavigateToAddWords(id!)
+      await navigateToAddWords(id!)
     } else {
       // For real pages, check type
       if (page.type === 'review') {
         router.push(`/notebook/${id}/review?page=${page.pageNumber}`)
       } else {
         // Use protected navigation for word addition
-        await protectedNavigateToAddWords(id!)
+        await navigateToAddWords(id!)
       }
     }
     setSelectedPage(null)

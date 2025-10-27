@@ -5,7 +5,7 @@ import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 
 export default function SaveJourneyScreen() {
   const router = useRouter()
-  const { getUserState, isLoading: subscriptionLoading } = useSubscription()
+  const { subscription, isLoading: subscriptionLoading } = useSubscription()
   const [isRouting, setIsRouting] = useState(false)
   const hasNavigated = useRef(false) // Single-use flag
   const lastUserState = useRef<string>('')
@@ -23,38 +23,15 @@ export default function SaveJourneyScreen() {
     
     try {
       // Wait for subscription state to stabilize
-      let stableState = ''
-      let stableCount = 0
-      const requiredStableCount = 3 // State must be same for 3 consecutive checks
-      const maxAttempts = 20 // 2 seconds max wait
+      console.log('🎯 SaveJourney: Waiting for subscription state to stabilize...')
       
-      for (let attempts = 0; attempts < maxAttempts; attempts++) {
-        if (!subscriptionLoading) {
-          const currentState = getUserState()
-          
-          if (currentState === stableState) {
-            stableCount++
-          } else {
-            stableState = currentState
-            stableCount = 1
-          }
-          
-          console.log(`🎯 SaveJourney: State check ${attempts + 1}: ${currentState} (stable: ${stableCount}/${requiredStableCount})`)
-          
-          // If state is stable for required count, proceed
-          if (stableCount >= requiredStableCount) {
-            console.log(`🎯 SaveJourney: State stabilized as: ${stableState}`)
-            break
-          }
-        }
-        
+      // Simple wait for subscription loading to complete
+      while (subscriptionLoading) {
         await new Promise(resolve => setTimeout(resolve, 100))
       }
       
-      // Get final state for navigation
-      const finalUserState = getUserState()
-      lastUserState.current = finalUserState
-      console.log(`🎯 SaveJourney: Final state for navigation: ${finalUserState}`)
+      console.log(`🎯 SaveJourney: Subscription state stabilized - Active: ${subscription.isActive}`)
+      lastUserState.current = subscription.isActive ? 'premium' : 'free'
       
       // Add small delay to ensure all state updates are complete
       await new Promise(resolve => setTimeout(resolve, 200))

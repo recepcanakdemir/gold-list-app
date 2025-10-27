@@ -20,6 +20,14 @@ export interface Database {
           last_activity_date: string | null
           onboarding_completed: boolean
           preferences: Record<string, any>
+          // RevenueCat integration fields
+          revenuecat_customer_id: string | null
+          original_purchase_date: string | null
+          latest_purchase_date: string | null
+          is_in_trial_revenuecat: boolean
+          trial_started_at_revenuecat: string | null
+          trial_ends_at_revenuecat: string | null
+          last_revenuecat_sync: string
         }
         Insert: {
           id: string
@@ -39,6 +47,14 @@ export interface Database {
           last_activity_date?: string | null
           onboarding_completed?: boolean
           preferences?: Record<string, any>
+          // RevenueCat integration fields
+          revenuecat_customer_id?: string | null
+          original_purchase_date?: string | null
+          latest_purchase_date?: string | null
+          is_in_trial_revenuecat?: boolean
+          trial_started_at_revenuecat?: string | null
+          trial_ends_at_revenuecat?: string | null
+          last_revenuecat_sync?: string
         }
         Update: {
           id?: string
@@ -58,6 +74,14 @@ export interface Database {
           last_activity_date?: string | null
           onboarding_completed?: boolean
           preferences?: Record<string, any>
+          // RevenueCat integration fields
+          revenuecat_customer_id?: string | null
+          original_purchase_date?: string | null
+          latest_purchase_date?: string | null
+          is_in_trial_revenuecat?: boolean
+          trial_started_at_revenuecat?: string | null
+          trial_ends_at_revenuecat?: string | null
+          last_revenuecat_sync?: string
         }
       }
       notebooks: {
@@ -291,6 +315,65 @@ export interface Database {
           remembered?: boolean
           next_review_date?: string | null
           response_time_ms?: number | null
+        }
+      }
+      revenuecat_purchases: {
+        Row: {
+          id: string
+          user_id: string
+          revenuecat_customer_id: string
+          product_identifier: string
+          transaction_id: string
+          original_transaction_id: string | null
+          purchase_date: string
+          expiration_date: string | null
+          is_trial_period: boolean
+          is_intro_period: boolean
+          price_usd: number | null
+          currency_code: string
+          subscription_period: string | null
+          environment: string
+          store: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          revenuecat_customer_id: string
+          product_identifier: string
+          transaction_id: string
+          original_transaction_id?: string | null
+          purchase_date?: string
+          expiration_date?: string | null
+          is_trial_period?: boolean
+          is_intro_period?: boolean
+          price_usd?: number | null
+          currency_code?: string
+          subscription_period?: string | null
+          environment?: string
+          store?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          revenuecat_customer_id?: string
+          product_identifier?: string
+          transaction_id?: string
+          original_transaction_id?: string | null
+          purchase_date?: string
+          expiration_date?: string | null
+          is_trial_period?: boolean
+          is_intro_period?: boolean
+          price_usd?: number | null
+          currency_code?: string
+          subscription_period?: string | null
+          environment?: string
+          store?: string
+          created_at?: string
+          updated_at?: string
         }
       }
     }

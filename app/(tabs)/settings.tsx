@@ -15,6 +15,7 @@ import { useApp } from '@/lib/contexts/AppContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { SharedHeader } from '@/components/shared-header'
+import { DevTimeDisplay } from '@/components/DevTimeDisplay'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 import { supabaseService } from '@/lib/services/supabaseService'
 import { isDeveloperAccount } from '@/lib/utils/devAccess'
@@ -24,7 +25,7 @@ export default function SettingsScreen() {
   const { signOut, profile } = useAuth()
   const { appState, settings, updateSettings, refreshData } = useApp()
   const { colors, toggleTheme, isDark } = useTheme()
-  const { subscription, getUserState, showPaywallModal } = useSubscription()
+  const { subscription, restorePurchases } = useSubscription()
   
   const [localSettings, setLocalSettings] = useState({
     ...settings,
@@ -37,6 +38,20 @@ export default function SettingsScreen() {
       Alert.alert('Success', 'Settings saved successfully')
     } catch (error) {
       Alert.alert('Error', 'Failed to save settings')
+    }
+  }
+
+  const handleRestorePurchases = async () => {
+    try {
+      const success = await restorePurchases()
+      if (success) {
+        Alert.alert('Success', 'Your purchases have been restored!')
+      } else {
+        Alert.alert('No Purchases Found', 'No previous purchases were found for this account.')
+      }
+    } catch (error) {
+      console.error('Restore error:', error)
+      Alert.alert('Restore Failed', 'Unable to restore purchases. Please try again.')
     }
   }
 
@@ -220,61 +235,44 @@ export default function SettingsScreen() {
 
         </View>
 
-        {/* Subscription Section - Only show for non-pre-trial users */}
-        {getUserState() !== 'pre-trial' && (
-          <View style={styles.section}>
+        {/* Subscription Section */}
+        <View style={styles.section}>
             <Text style={styles.sectionTitle}>Subscription</Text>
             
             <View style={styles.settingCard}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingLabel}>
-                    {getUserState() === 'trial' && `Trial (${subscription.trialDaysRemaining} days left)`}
-                    {getUserState() === 'post-trial' && 'Free Account'}
-                    {getUserState() === 'premium' && `Premium (${subscription.tier})`}
+                    Premium ({subscription.tier || 'subscribed'})
                   </Text>
                   <Text style={styles.settingDescription}>
-                    {getUserState() === 'trial' && 'Upgrade to continue after trial ends'}
-                    {getUserState() === 'post-trial' && 'Upgrade to unlock all features'}
-                    {getUserState() === 'premium' && 'Manage your premium subscription'}
+                    You have an active premium subscription
                   </Text>
                 </View>
               </View>
               
-              {/* Action buttons based on user state */}
-              {(getUserState() === 'trial' || getUserState() === 'post-trial') && (
+              {/* Premium subscription management */}
+              <View style={styles.premiumActions}>
                 <TouchableOpacity 
-                  style={styles.upgradeButton}
-                  onPress={showPaywallModal}
+                  style={styles.subscriptionCancelButton}
+                  onPress={() => Alert.alert(
+                    'Cancel Subscription',
+                    'To cancel your subscription, please go to:\n\niPhone Settings → [Your Name] → Subscriptions → Gold List Method → Cancel Subscription\n\nYour subscription will remain active until the end of the current billing period.',
+                    [{ text: 'OK' }]
+                  )}
                 >
-                  <Text style={styles.upgradeButtonText}>Upgrade to Premium</Text>
+                  <Text style={styles.subscriptionCancelButtonText}>Cancel Subscription</Text>
                 </TouchableOpacity>
-              )}
-              
-              {getUserState() === 'premium' && (
-                <View style={styles.premiumActions}>
-                  <TouchableOpacity 
-                    style={styles.managePlanButton}
-                    onPress={showPaywallModal}
-                  >
-                    <Text style={styles.managePlanButtonText}>Change Plan</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={styles.subscriptionCancelButton}
-                    onPress={() => Alert.alert(
-                      'Cancel Subscription',
-                      'To cancel your subscription, please go to:\n\niPhone Settings → [Your Name] → Subscriptions → Gold List Method → Cancel Subscription\n\nYour subscription will remain active until the end of the current billing period.',
-                      [{ text: 'OK' }]
-                    )}
-                  >
-                    <Text style={styles.subscriptionCancelButtonText}>Cancel Subscription</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
+                
+                <TouchableOpacity 
+                  style={styles.restoreButton}
+                  onPress={restorePurchases}
+                >
+                  <Text style={styles.restoreButtonText}>Restore Purchases</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        )}
 
         {/* Testing & Development - Only for developer account */}
         {isDeveloperAccount(profile?.email || '') && (
@@ -300,6 +298,9 @@ export default function SettingsScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
+            
+            {/* DevTime Simulation */}
+            <DevTimeDisplay />
           </View>
         )}
 
@@ -319,7 +320,7 @@ export default function SettingsScreen() {
               style={styles.feedbackButton}
               onPress={() => {
                 const subject = 'Gold List Method App Feedback'
-                const body = `Hi there!\n\nI'd like to share some feedback about the Gold List Method app:\n\n[Please write your feedback here]\n\n---\nApp Version: ${require('../../package.json').version || '1.0.0'}\nUser: ${profile?.email || 'Unknown'}\nSubscription: ${getUserState()}`
+                const body = `Hi there!\n\nI'd like to share some feedback about the Gold List Method app:\n\n[Please write your feedback here]\n\n---\nApp Version: ${require('../../package.json').version || '1.0.0'}\nUser: ${profile?.email || 'Unknown'}\nSubscription: ${subscription.isActive ? 'Premium' : 'Free'}`
                 
                 const mailto = `mailto:recepcanakdemir@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
                 
@@ -337,69 +338,50 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Survey Data Management */}
+        {/* Privacy & Legal */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Survey Data</Text>
+          <Text style={styles.sectionTitle}>Privacy & Legal</Text>
           
           <View style={styles.settingCard}>
-            <View style={styles.settingRow}>
+            <TouchableOpacity 
+              style={styles.settingRow}
+              onPress={() => Linking.openURL('https://your-privacy-policy-url.com')}
+            >
               <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Your Survey Responses</Text>
-                <Text style={styles.settingDescription}>Manage the data you shared during onboarding</Text>
+                <Text style={styles.settingLabel}>Privacy Policy</Text>
+                <Text style={styles.settingDescription}>Read our privacy policy</Text>
               </View>
-            </View>
+              <Text style={styles.settingArrow}>→</Text>
+            </TouchableOpacity>
             
-            <View style={styles.surveyActions}>
-              <TouchableOpacity 
-                style={styles.surveyViewButton}
-                onPress={() => {
-                  // Show survey data in alert (for now)
-                  Alert.alert(
-                    'Survey Data',
-                    'This feature allows you to view and manage your onboarding survey responses. You can delete this data at any time for privacy compliance.',
-                    [
-                      { text: 'View Data', onPress: () => console.log('View survey data') },
-                      { text: 'Cancel', style: 'cancel' }
-                    ]
-                  )
-                }}
-              >
-                <Text style={styles.surveyViewButtonText}>View My Data</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.surveyDeleteButton}
-                onPress={() => {
-                  Alert.alert(
-                    'Delete Survey Data',
-                    'This will permanently delete all your onboarding survey responses. This action cannot be undone.\n\nYour app experience will not be affected, but we won\'t be able to use your responses for improvements.',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { 
-                        text: 'Delete Data', 
-                        style: 'destructive',
-                        onPress: async () => {
-                          // Delete survey data logic here
-                          Alert.alert(
-                            'Data Deleted',
-                            'Your survey responses have been permanently deleted.',
-                            [{ text: 'OK' }]
-                          )
-                        }
-                      }
-                    ]
-                  )
-                }}
-              >
-                <Text style={styles.surveyDeleteButtonText}>Delete Survey Data</Text>
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.privacyNote}>
-              <Text style={styles.privacyNoteText}>
-                💡 Survey data helps us improve the app. It's stored securely and automatically deleted after 2 years. You can delete it anytime.
-              </Text>
-            </View>
+            <TouchableOpacity 
+              style={styles.settingRow}
+              onPress={() => Linking.openURL('https://your-terms-url.com')}
+            >
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Terms of Use</Text>
+                <Text style={styles.settingDescription}>Read our terms of service</Text>
+              </View>
+              <Text style={styles.settingArrow}>→</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Subscription Management */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Subscription</Text>
+          
+          <View style={styles.settingCard}>
+            <TouchableOpacity 
+              style={styles.settingRow}
+              onPress={handleRestorePurchases}
+            >
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Restore Purchases</Text>
+                <Text style={styles.settingDescription}>Restore previous subscription purchases</Text>
+              </View>
+              <Text style={styles.settingArrow}>→</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -653,6 +635,19 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontSize: TYPOGRAPHY.base,
     fontWeight: TYPOGRAPHY.semibold,
   },
+  restoreButton: {
+    backgroundColor: colors.secondary,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center' as const,
+    ...SHADOWS.sm,
+  },
+  restoreButtonText: {
+    color: colors.white,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: TYPOGRAPHY.semibold,
+  },
   
   // Feedback Section Styles
   feedbackButton: {
@@ -670,36 +665,10 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontWeight: TYPOGRAPHY.semibold,
   },
   
-  // Survey Data Management Styles
-  surveyActions: {
-    marginTop: SPACING.md,
-    gap: SPACING.sm,
-  },
-  surveyViewButton: {
-    backgroundColor: colors.primary,
-    paddingVertical: SPACING.md,
-    paddingHorizontal: SPACING.lg,
-    borderRadius: RADIUS.lg,
-    alignItems: 'center' as const,
-    ...SHADOWS.sm,
-  },
-  surveyViewButtonText: {
-    color: colors.white,
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-  },
-  surveyDeleteButton: {
-    backgroundColor: colors.error,
-    paddingVertical: SPACING.md,
-    paddingHorizontal: SPACING.lg,
-    borderRadius: RADIUS.lg,
-    alignItems: 'center' as const,
-    ...SHADOWS.sm,
-  },
-  surveyDeleteButtonText: {
-    color: colors.white,
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
+  settingArrow: {
+    fontSize: 18,
+    color: colors.textSecondary,
+    fontWeight: 'bold',
   },
   privacyNote: {
     marginTop: SPACING.md,

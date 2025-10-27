@@ -9,14 +9,14 @@ import {
   Alert,
   Modal,
   FlatList,
-  Animated,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useApp } from '@/lib/contexts/AppContext'
+import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
-import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { supabaseService } from '@/lib/services/supabaseService'
+import { isDeveloperAccount } from '@/lib/utils/devAccess'
 import { TYPOGRAPHY, SPACING, RADIUS, SHADOWS } from '@/lib/constants/design'
 
 // Language options for notebook creation
@@ -41,8 +41,8 @@ const languageOptions = [
 export default function CreateNotebookModal() {
   const router = useRouter()
   const { appState, refreshNotebooks } = useApp()
+  const { profile } = useAuth()
   const { colors } = useTheme()
-  const { subscription, canCreateNotebook, getUpgradeMessage, showPaywallModal } = useSubscription()
   const [title, setTitle] = useState('')
   const [selectedLanguage, setSelectedLanguage] = useState<{
     code: string
@@ -53,8 +53,6 @@ export default function CreateNotebookModal() {
   const [loading, setLoading] = useState(false)
   const [showLanguageModal, setShowLanguageModal] = useState(false)
   const [languageSearch, setLanguageSearch] = useState('')
-  const [howItWorksExpanded, setHowItWorksExpanded] = useState(false)
-  const [expandedHeight] = useState(new Animated.Value(0))
 
   const handleCreate = async () => {
     if (!title.trim()) {
@@ -77,19 +75,7 @@ export default function CreateNotebookModal() {
       return
     }
 
-    // Check subscription limits (single notebook limit for trial/free users)
-    const canCreate = await canCreateNotebook()
-    if (!canCreate) {
-      Alert.alert(
-        'Notebook Limit Reached',
-        getUpgradeMessage('notebook_limit'),
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Upgrade', onPress: () => showPaywallModal() }
-        ]
-      )
-      return
-    }
+    // No subscription checks needed (hard paywall model - users here are already subscribed)
 
     setLoading(true)
     try {
@@ -129,16 +115,6 @@ export default function CreateNotebookModal() {
 
   const wordsPerDayOptions = [10, 15, 20, 25]
 
-  const toggleHowItWorks = () => {
-    const toValue = howItWorksExpanded ? 0 : 200
-    setHowItWorksExpanded(!howItWorksExpanded)
-    
-    Animated.timing(expandedHeight, {
-      toValue,
-      duration: 300,
-      useNativeDriver: false,
-    }).start()
-  }
 
   const styles = createStyles(colors)
 
@@ -212,110 +188,26 @@ export default function CreateNotebookModal() {
           <Text style={styles.helpText}>How many new words you want to add daily</Text>
           
           <View style={styles.optionsGrid}>
-            {wordsPerDayOptions.map((option) => {
-              const isLocked = !subscription.isActive && option > 10
-              const isDisabled = isLocked
-              
-              return (
-                <TouchableOpacity
-                  key={option}
-                  style={[
-                    styles.optionButton,
-                    wordsPerDay === option && styles.optionButtonSelected,
-                    isLocked && styles.optionButtonLocked
-                  ]}
-                  onPress={() => {
-                    if (isLocked) {
-                      showPaywallModal()
-                    } else {
-                      setWordsPerDay(option)
-                    }
-                  }}
-                  disabled={false} // Allow tapping to show paywall
-                >
-                  <View style={styles.optionContent}>
-                    <Text style={[
-                      styles.optionText,
-                      wordsPerDay === option && styles.optionTextSelected,
-                      isLocked && styles.optionTextLocked
-                    ]}>
-                      {option}
-                    </Text>
-                    {isLocked && (
-                      <Text style={styles.premiumBadgeSmall}>✨</Text>
-                    )}
-                  </View>
-                  {isLocked && (
-                    <Text style={styles.lockedLabel}>Premium</Text>
-                  )}
-                </TouchableOpacity>
-              )
-            })}
-          </View>
-          
-          {!subscription.isActive && (
-            <Text style={styles.freeUserNote}>
-              💡 Free users start with 10 words/day. Upgrade for higher daily goals and unlimited learning.
-            </Text>
-          )}
-        </View>
-
-        {/* Free Plan Limit Info */}
-        {!subscription.isActive && (
-          <View style={styles.section}>
-            <View style={styles.limitIndicator}>
-              <Text style={styles.limitText}>
-                📋 Free Plan: 1 Bronze notebook per language • 10 words max per page
-              </Text>
-              <TouchableOpacity onPress={() => showPaywallModal()}>
-                <Text style={styles.upgradeHint}>Upgrade for unlimited →</Text>
+            {wordsPerDayOptions.map((option) => (
+              <TouchableOpacity
+                key={option}
+                style={[
+                  styles.optionButton,
+                  wordsPerDay === option && styles.optionButtonSelected
+                ]}
+                onPress={() => setWordsPerDay(option)}
+              >
+                <Text style={[
+                  styles.optionText,
+                  wordsPerDay === option && styles.optionTextSelected
+                ]}>
+                  {option}
+                </Text>
               </TouchableOpacity>
-            </View>
+            ))}
           </View>
-        )}
-
-        {/* Collapsible How It Works */}
-        <View style={styles.section}>
-          <TouchableOpacity style={styles.howItWorksHeader} onPress={toggleHowItWorks}>
-            <Text style={styles.howItWorksTitle}>📚 Gold List Method - How it works</Text>
-            <Text style={[styles.expandIcon, howItWorksExpanded && styles.expandIconRotated]}>
-              ▼
-            </Text>
-          </TouchableOpacity>
-          
-          <Animated.View style={[styles.howItWorksContent, { height: expandedHeight }]}>
-            <View style={styles.infoPoint}>
-              <Text style={styles.infoBullet}>🥉</Text>
-              <Text style={styles.infoText}>
-                <Text style={styles.infoTextBold}>Bronze Notebooks:</Text> Start here! Add new vocabulary daily and review after 14 days across 4 rounds.
-              </Text>
-            </View>
-            <View style={styles.infoPoint}>
-              <Text style={styles.infoBullet}>🥈</Text>
-              <Text style={styles.infoText}>
-                <Text style={styles.infoTextBold}>Silver Notebooks:</Text> Challenging words that need more attention are automatically moved here.
-              </Text>
-            </View>
-            <View style={styles.infoPoint}>
-              <Text style={styles.infoBullet}>🥇</Text>
-              <Text style={styles.infoText}>
-                <Text style={styles.infoTextBold}>Gold Notebooks:</Text> The most difficult words get specialized focus for mastery.
-              </Text>
-            </View>
-            <View style={styles.infoPoint}>
-              <Text style={styles.infoBullet}>⚡</Text>
-              <Text style={styles.infoText}>
-                <Text style={styles.infoTextBold}>Natural Learning:</Text> No cramming - just add words daily and let your memory do the work over time.
-              </Text>
-            </View>
-            <View style={styles.infoPoint}>
-              <Text style={styles.infoBullet}>🎯</Text>
-              <Text style={styles.infoText}>
-                <Text style={styles.infoTextBold}>High Success Rate:</Text> Most words are remembered permanently after just one 4-round cycle.
-              </Text>
-            </View>
-          </Animated.View>
         </View>
+
       </ScrollView>
 
       {/* Language Selection Modal */}
@@ -514,117 +406,6 @@ const createStyles = (colors: any) => StyleSheet.create({
   optionTextSelected: {
     color: colors.primary,
     fontWeight: TYPOGRAPHY.semibold,
-  },
-  optionButtonLocked: {
-    borderColor: colors.borderLight,
-    backgroundColor: colors.backgroundSecondary,
-    opacity: 0.7,
-  },
-  optionContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  optionTextLocked: {
-    color: colors.textSecondary,
-  },
-  premiumBadgeSmall: {
-    fontSize: TYPOGRAPHY.xs,
-    marginLeft: SPACING.xs,
-  },
-  lockedLabel: {
-    fontSize: TYPOGRAPHY.xs,
-    color: colors.textSecondary,
-    marginTop: SPACING.xs,
-    textAlign: 'center',
-  },
-  freeUserNote: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    marginTop: SPACING.md,
-    paddingHorizontal: SPACING.sm,
-    lineHeight: 20,
-    fontStyle: 'italic',
-  },
-  
-  // Limit Indicator Styles
-  limitIndicator: {
-    backgroundColor: colors.primaryLight,
-    borderRadius: RADIUS.md,
-    padding: SPACING.md,
-    marginTop: SPACING.sm,
-    marginBottom: SPACING.md,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  limitText: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.primary,
-    fontWeight: TYPOGRAPHY.medium,
-    flex: 1,
-  },
-  upgradeHint: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.primary,
-    fontWeight: TYPOGRAPHY.semibold,
-    textDecorationLine: 'underline',
-  },
-  
-  // How It Works Collapsible
-  howItWorksHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: colors.cardBackground,
-    borderRadius: RADIUS.lg,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...SHADOWS.sm,
-  },
-  howItWorksTitle: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.textPrimary,
-  },
-  expandIcon: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-    transform: [{ rotate: '0deg' }],
-  },
-  expandIconRotated: {
-    transform: [{ rotate: '180deg' }],
-  },
-  howItWorksContent: {
-    overflow: 'hidden',
-    backgroundColor: colors.cardBackground,
-    borderBottomLeftRadius: RADIUS.lg,
-    borderBottomRightRadius: RADIUS.lg,
-    paddingHorizontal: SPACING.lg,
-  },
-  infoPoint: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: SPACING.sm,
-  },
-  infoBullet: {
-    fontSize: TYPOGRAPHY.base,
-    color: colors.primary,
-    marginRight: SPACING.sm,
-    marginTop: 2,
-  },
-  infoText: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-    lineHeight: 20,
-    flex: 1,
-  },
-  infoTextBold: {
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.textPrimary,
   },
   
   // Modal Styles

@@ -68,7 +68,6 @@ export default function WordInputScreen() {
   const { refreshNotebooks, updateNotebookLastUsed } = useApp()
   const { recordUserActivity, profile } = useAuth()
   const { currentSimulatedDay, getCurrentDate } = useDevTime()
-  const { subscription, canAddWords, getUpgradeMessage, showPaywallModal, getUserState } = useSubscription()
   const [notebook, setNotebook] = useState<NotebookWithStats | null>(null)
   const [mode, setMode] = useState<'focus' | 'fullpage'>('focus')
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -165,18 +164,7 @@ export default function WordInputScreen() {
       return
     }
 
-    // Check subscription for AI features
-    if (!subscription.isActive) {
-      Alert.alert(
-        'AI Features - Premium Only',
-        getUpgradeMessage('ai_features'),
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Upgrade', onPress: () => showPaywallModal() }
-        ]
-      )
-      return
-    }
+    // No subscription checks needed (hard paywall model)
 
     const key = getWordKey(word, meaning)
     
@@ -229,7 +217,7 @@ export default function WordInputScreen() {
       // Clear loading state
       setAiGenerationStates(prev => new Map(prev.set(key, false)))
     }
-  }, [notebook?.language, getWordKey, subscription.isActive, getUpgradeMessage, showPaywallModal])
+  }, [notebook?.language, getWordKey])
 
 
   const getAiState = useCallback((word: string, meaning: string) => {
@@ -345,32 +333,7 @@ export default function WordInputScreen() {
     loadNotebook()
   }, [id])
 
-  // Access control: block post-trial users from accessing input screen
-  useEffect(() => {
-    const userState = getUserState()
-    
-    if (userState === 'post-trial') {
-      // Add a small delay to avoid race conditions during subscription state updates
-      setTimeout(() => {
-        // Double-check user state after delay to avoid false positives
-        const currentUserState = getUserState()
-        if (currentUserState === 'post-trial') {
-          console.log('🚫 Input Screen: Post-trial user confirmed, redirecting to paywall')
-          showPaywallModal()
-          
-          // Safe navigation: check if we can go back, otherwise go to dashboard
-          if (router.canGoBack()) {
-            router.back()
-          } else {
-            console.log('🚫 Input Screen: No previous screen, navigating to dashboard')
-            router.replace('/(tabs)/dashboard')
-          }
-        } else {
-          console.log('🚫 Input Screen: User state changed during check, skipping paywall')
-        }
-      }, 500)
-    }
-  }, [getUserState, showPaywallModal, router])
+  // No access control needed (hard paywall model - users here are already subscribed)
 
   // Track streak changes for animation
   useEffect(() => {
@@ -783,25 +746,7 @@ export default function WordInputScreen() {
       return
     }
 
-    // Check subscription limits for new words (trial system)
-    if (wordsToSave.length > 0) {
-      const canAdd = await canAddWords()
-      if (!canAdd) {
-        const contextMessage = subscription.isInTrial 
-          ? 'Trial users can add unlimited words, but only to 1 notebook'
-          : 'Your trial has ended. Upgrade to continue adding new vocabulary'
-        
-        Alert.alert(
-          subscription.isInTrial ? 'Multiple Notebooks - Premium Only' : 'Trial Ended',
-          contextMessage,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Upgrade', onPress: () => showPaywallModal() }
-          ]
-        )
-        return
-      }
-    }
+    // No subscription checks needed (hard paywall model)
 
     // Prepare data for save page - combine new and updated words
     const allWordsForSave = [
@@ -1042,21 +987,7 @@ export default function WordInputScreen() {
           </View>
         </View>
 
-        {/* Post-Trial Warning Banner */}
-        {!subscription.isActive && !subscription.isInTrial && subscription.trialStartedAt && (
-          <View style={styles.postTrialBanner}>
-            <Text style={styles.postTrialTitle}>📖 Review Mode</Text>
-            <Text style={styles.postTrialMessage}>
-              Your trial has ended. You can review your existing vocabulary, but need to upgrade to add new words.
-            </Text>
-            <TouchableOpacity 
-              style={styles.upgradeFromBannerButton}
-              onPress={() => showPaywallModal()}
-            >
-              <Text style={styles.upgradeFromBannerText}>Upgrade Now</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        {/* Removed post-trial banner (hard paywall model) */}
 
         {/* Progress Bar - Now below header */}
         <View style={styles.progressSection}>
@@ -1769,41 +1700,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     flex: 1,
   },
   
-  // Post-Trial Banner Styles
-  postTrialBanner: {
-    backgroundColor: colors.warning,
-    margin: SPACING.lg,
-    marginBottom: SPACING.md,
-    padding: SPACING.lg,
-    borderRadius: RADIUS.lg,
-    alignItems: 'center',
-    ...SHADOWS.sm,
-  },
-  postTrialTitle: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.white,
-    marginBottom: SPACING.xs,
-  },
-  postTrialMessage: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.white,
-    textAlign: 'center',
-    opacity: 0.9,
-    marginBottom: SPACING.md,
-    lineHeight: 20,
-  },
-  upgradeFromBannerButton: {
-    backgroundColor: colors.white,
-    borderRadius: RADIUS.md,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
-  },
-  upgradeFromBannerText: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.warning,
-  },
+  // Removed post-trial banner styles (hard paywall model)
   mainContent: {
     flex: 1,
   },

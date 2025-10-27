@@ -4,7 +4,6 @@ import { useApp } from '@/lib/contexts/AppContext'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useDevTime } from '@/lib/contexts/DevTimeContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
-import { useSubscription } from '@/lib/contexts/SubscriptionContext'
 import { useLocalNotebookState } from '@/lib/hooks/useLocalNotebookState'
 import { useLocalStreakState } from '@/lib/hooks/useLocalStreakState'
 import { useProgressManager } from '@/lib/hooks/useProgressManager'
@@ -122,7 +121,6 @@ export default function DashboardScreen() {
   const { profile, refreshProfile } = useAuth()
   const { appState, refreshNotebooks, addEventListener, emitEvent } = useApp()
   const { colors } = useTheme()
-  const { subscription, showPaywallModal, hasFeature, getUserState } = useSubscription()
   const { currentSimulatedDay, getCurrentDate } = useDevTime()
   const queryClient = useQueryClient()
   
@@ -978,63 +976,6 @@ export default function DashboardScreen() {
 
   const styles = createStyles(colors)
 
-  // Check user state for dashboard access
-  const userState = getUserState()
-  
-  // Show upgrade message for post-trial users
-  if (userState === 'post-trial') {
-    return (
-      <View style={styles.container}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Header */}
-          <SharedHeader 
-            title="Dashboard" 
-          />
-          
-          {/* Upgrade Message for Post-Trial Users */}
-          <View style={styles.upgradeContainer}>
-            <View style={styles.upgradeCard}>
-              <Text style={styles.upgradeIcon}>📊</Text>
-              <Text style={styles.upgradeTitle}>Dashboard Access</Text>
-              <Text style={styles.upgradeSubtitle}>
-                Upgrade to Premium to unlock your learning dashboard
-              </Text>
-              
-              <View style={styles.benefitsList}>
-                <View style={styles.benefitItem}>
-                  <Text style={styles.benefitIcon}>📈</Text>
-                  <Text style={styles.benefitText}>Track your learning progress</Text>
-                </View>
-                <View style={styles.benefitItem}>
-                  <Text style={styles.benefitIcon}>📅</Text>
-                  <Text style={styles.benefitText}>View weekly and monthly analytics</Text>
-                </View>
-                <View style={styles.benefitItem}>
-                  <Text style={styles.benefitIcon}>🎯</Text>
-                  <Text style={styles.benefitText}>Monitor vocabulary mastery rates</Text>
-                </View>
-                <View style={styles.benefitItem}>
-                  <Text style={styles.benefitIcon}>🔥</Text>
-                  <Text style={styles.benefitText}>See learning streaks and achievements</Text>
-                </View>
-              </View>
-              
-              <TouchableOpacity 
-                style={styles.upgradeButton}
-                onPress={showPaywallModal}
-              >
-                <Text style={styles.upgradeButtonText}>Upgrade to Premium</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </ScrollView>
-      </View>
-    )
-  }
 
   return (
     <View style={styles.container}>
@@ -1115,27 +1056,7 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* Premium Analytics Teaser for Free Users */}
-        {!subscription.isActive && (
-          <TouchableOpacity 
-            style={styles.premiumTeaserCard} 
-            onPress={() => showPaywallModal()}
-          >
-            <View style={styles.premiumTeaserHeader}>
-              <Text style={styles.premiumTeaserTitle}>📊 Advanced Analytics</Text>
-              <Text style={styles.premiumBadge}>PREMIUM</Text>
-            </View>
-            <Text style={styles.premiumTeaserDescription}>
-              Get detailed insights into your learning patterns, retention rates, and personalized recommendations
-            </Text>
-            <View style={styles.premiumFeaturesList}>
-              <Text style={styles.premiumFeature}>• Learning velocity tracking</Text>
-              <Text style={styles.premiumFeature}>• Memory retention analysis</Text>
-              <Text style={styles.premiumFeature}>• Personalized review scheduling</Text>
-            </View>
-            <Text style={styles.premiumCTA}>Tap to unlock →</Text>
-          </TouchableOpacity>
-        )}
+        {/* Removed premium analytics teaser (hard paywall model) */}
 
         {/* Section 2: Daily Activity Heatmap */}
         <View style={styles.section2Card}>
@@ -1647,57 +1568,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     flex: 1,
   },
   
-  // Premium Teaser Styles
-  premiumTeaserCard: {
-    backgroundColor: colors.cardBackground,
-    borderRadius: RADIUS.xl,
-    padding: SPACING.xl,
-    marginHorizontal: SPACING.xl,
-    marginBottom: SPACING.xl,
-    borderWidth: 2,
-    borderColor: colors.primary,
-    ...SHADOWS.md,
-  },
-  premiumTeaserHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
-  },
-  premiumTeaserTitle: {
-    fontSize: TYPOGRAPHY.lg,
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.textPrimary,
-  },
-  premiumBadge: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.xs,
-    borderRadius: RADIUS.sm,
-    fontSize: TYPOGRAPHY.xs,
-    fontWeight: TYPOGRAPHY.bold,
-    color: colors.white,
-  },
-  premiumTeaserDescription: {
-    fontSize: TYPOGRAPHY.base,
-    color: colors.textSecondary,
-    lineHeight: 22,
-    marginBottom: SPACING.md,
-  },
-  premiumFeaturesList: {
-    marginBottom: SPACING.md,
-  },
-  premiumFeature: {
-    fontSize: TYPOGRAPHY.sm,
-    color: colors.textSecondary,
-    marginBottom: SPACING.xs,
-  },
-  premiumCTA: {
-    fontSize: TYPOGRAPHY.base,
-    fontWeight: TYPOGRAPHY.semibold,
-    color: colors.primary,
-    textAlign: 'center',
-  },
+  // Removed premium teaser styles (hard paywall model)
   
   // Upgrade message styles
   upgradeContainer: {

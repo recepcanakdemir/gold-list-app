@@ -108,10 +108,10 @@ export default function ScienceBehindScreen() {
   const [startAnimation, setStartAnimation] = useState(false)
 
   const sciencePrinciples = [
-    "It uses the spacing effect to strengthen long-term memory through timed reviews.",
-    "Writing by hand improves deep processing and memory encoding.",
-    "It reduces cognitive load by removing pressure to memorize immediately.",
-    "Forgetting helps reinforce memory through active recall during review."
+    "Research on spaced repetition suggests timed reviews help strengthen memory.",
+    "Studies indicate that handwriting can improve processing and retention.",
+    "Reducing immediate pressure may help with natural learning processes.",
+    "Active recall through review is a well-established learning technique."
   ]
 
   const handleContinue = () => {

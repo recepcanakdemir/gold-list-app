@@ -12,7 +12,7 @@ Gold List Method App — Detailed Onboarding Flow
 Logo: Placeholder for now
 Purpose: Create emotional connection and make the user feel they made the right choice.
 Headline: “Welcome to your new way of remembering.”
-Subtext: “You’ve just chosen a scientifically proven path to mastering vocabulary without stress.”
+Subtext: "You've just chosen an effective path to mastering vocabulary without stress."
 CTA: “Continue”
 Integration: Simple /app/onboarding/welcome.tsx screen.
 

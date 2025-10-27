@@ -17,7 +17,7 @@ import { SPACING, TYPOGRAPHY } from '@/lib/constants/design'
 export default function CompletionScreen() {
   const router = useRouter()
   const { completeOnboarding } = useAuth()
-  const { getUserState } = useSubscription()
+  const { subscription } = useSubscription()
   const [isCompleting, setIsCompleting] = useState(false)
   
   // Animation values
@@ -79,11 +79,10 @@ export default function CompletionScreen() {
       
       // Small delay to ensure profile propagation before navigation
       setTimeout(() => {
-        const userState = getUserState()
-        console.log(`🎯 CompletionScreen: User state: ${userState}`)
+        console.log(`🎯 CompletionScreen: Subscription active: ${subscription.isActive}`)
         
-        if (userState === 'pre-trial') {
-          console.log('🎯 CompletionScreen: Pre-trial user, showing paywall')
+        if (!subscription.isActive) {
+          console.log('🎯 CompletionScreen: User has no active subscription, showing paywall')
           router.replace('/paywall')
         } else {
           console.log('🎯 CompletionScreen: User has subscription, going to main app')
@@ -95,8 +94,7 @@ export default function CompletionScreen() {
       console.error('🎯 CompletionScreen: Error completing onboarding:', error)
       setIsCompleting(false)
       // Still try to navigate in case of error - check subscription state
-      const userState = getUserState()
-      if (userState === 'pre-trial') {
+      if (!subscription.isActive) {
         router.replace('/paywall')
       } else {
         router.replace('/(tabs)')

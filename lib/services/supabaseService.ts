@@ -15,6 +15,8 @@ import {
   type FrontendMonthlyProgressMonth,
   type FrontendTotalStats
 } from '../utils/dataTransform'
+import type { CustomerInfo } from 'react-native-purchases'
+import type { RevenueCatSyncData } from '@/lib/types/revenuecat'
 
 // =============================================
 // PERFORMANCE & RELIABILITY HELPERS
@@ -3732,6 +3734,209 @@ class SupabaseService {
 
       return data
     }, 'getSurveyAnalytics')
+  }
+
+  // =============================================
+  // REVENUECAT INTEGRATION METHODS
+  // =============================================
+
+  // Sync RevenueCat customer data to user profile
+  async syncRevenueCatData(syncData: RevenueCatSyncData): Promise<{ success: boolean; error?: string }> {
+    return withRetry(async () => {
+      console.log('🔄 Syncing RevenueCat data to profile...', {
+        userId: syncData.userId,
+        subscriptionStatus: syncData.subscriptionStatus,
+        isInTrial: syncData.isInTrial
+      })
+
+      const { data, error } = await supabase.rpc('sync_revenuecat_data', {
+        p_user_id: syncData.userId,
+        p_revenuecat_customer_id: syncData.revenueCatCustomerId,
+        p_subscription_status: syncData.subscriptionStatus,
+        p_subscription_expires_at: syncData.subscriptionExpiresAt?.toISOString(),
+        p_subscription_activated_at: syncData.subscriptionActivatedAt?.toISOString(),
+        p_original_purchase_date: syncData.originalPurchaseDate?.toISOString(),
+        p_latest_purchase_date: syncData.customerInfo.latestExpirationDate,
+        p_is_in_trial: syncData.isInTrial,
+        p_trial_started_at: syncData.trialStartedAt?.toISOString(),
+        p_trial_ends_at: syncData.trialStartedAt ? 
+          new Date(syncData.trialStartedAt.getTime() + (14 * 24 * 60 * 60 * 1000)).toISOString() : 
+          null
+      })
+
+      if (error) {
+        console.error('❌ Error syncing RevenueCat data:', error)
+        throw new Error(`Failed to sync RevenueCat data: ${error.message}`)
+      }
+
+      console.log('✅ RevenueCat data synced successfully')
+      return { success: true }
+    }, 'syncRevenueCatData')
+  }
+
+  // Get user state based on RevenueCat data
+  async getUserStateRevenueCat(userId: string): Promise<'pre-trial' | 'trial' | 'post-trial' | 'premium'> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('get_user_state_revenuecat', {
+        p_user_id: userId
+      })
+
+      if (error) {
+        console.error('❌ Error getting user state:', error)
+        throw new Error(`Failed to get user state: ${error.message}`)
+      }
+
+      return data as 'pre-trial' | 'trial' | 'post-trial' | 'premium'
+    }, 'getUserStateRevenueCat')
+  }
+
+  // Check if user can start trial (RevenueCat version)
+  async canStartTrialRevenueCat(userId: string): Promise<boolean> {
+    return withRetry(async () => {
+      const { data, error } = await supabase.rpc('can_start_trial_revenuecat', {
+        p_user_id: userId
+      })
+
+      if (error) {
+        console.error('❌ Error checking trial eligibility:', error)
+        throw new Error(`Failed to check trial eligibility: ${error.message}`)
+      }
+
+      return data as boolean
+    }, 'canStartTrialRevenueCat')
+  }
+
+  // Log RevenueCat purchase transaction
+  async logRevenueCatPurchase(purchaseData: {
+    userId: string
+    revenueCatCustomerId: string
+    productIdentifier: string
+    transactionId: string
+    originalTransactionId?: string
+    purchaseDate: Date
+    expirationDate?: Date
+    isTrialPeriod: boolean
+    isIntroPeriod: boolean
+    priceUsd?: number
+    currencyCode?: string
+    subscriptionPeriod?: string
+    environment?: string
+    store?: string
+  }): Promise<{ success: boolean; purchaseId?: string; error?: string }> {
+    return withRetry(async () => {
+      console.log('📝 Logging RevenueCat purchase...', {
+        userId: purchaseData.userId,
+        productIdentifier: purchaseData.productIdentifier,
+        transactionId: purchaseData.transactionId,
+        isTrialPeriod: purchaseData.isTrialPeriod
+      })
+
+      const { data, error } = await supabase.rpc('log_revenuecat_purchase', {
+        p_user_id: purchaseData.userId,
+        p_revenuecat_customer_id: purchaseData.revenueCatCustomerId,
+        p_product_identifier: purchaseData.productIdentifier,
+        p_transaction_id: purchaseData.transactionId,
+        p_original_transaction_id: purchaseData.originalTransactionId,
+        p_purchase_date: purchaseData.purchaseDate.toISOString(),
+        p_expiration_date: purchaseData.expirationDate?.toISOString(),
+        p_is_trial_period: purchaseData.isTrialPeriod,
+        p_is_intro_period: purchaseData.isIntroPeriod,
+        p_price_usd: purchaseData.priceUsd,
+        p_currency_code: purchaseData.currencyCode || 'USD',
+        p_subscription_period: purchaseData.subscriptionPeriod,
+        p_environment: purchaseData.environment || 'production',
+        p_store: purchaseData.store || 'app_store'
+      })
+
+      if (error) {
+        console.error('❌ Error logging purchase:', error)
+        throw new Error(`Failed to log purchase: ${error.message}`)
+      }
+
+      console.log('✅ Purchase logged successfully:', data)
+      return { success: true, purchaseId: data }
+    }, 'logRevenueCatPurchase')
+  }
+
+  // Get user's purchase history
+  async getRevenueCatPurchaseHistory(userId: string): Promise<Tables<'revenuecat_purchases'>['Row'][]> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .from('revenuecat_purchases')
+        .select('*')
+        .eq('user_id', userId)
+        .order('purchase_date', { ascending: false })
+
+      if (error) {
+        console.error('❌ Error getting purchase history:', error)
+        throw new Error(`Failed to get purchase history: ${error.message}`)
+      }
+
+      return data || []
+    }, 'getRevenueCatPurchaseHistory')
+  }
+
+  // Update profile with RevenueCat customer ID
+  async updateRevenueCatCustomerId(userId: string, customerId: string): Promise<{ success: boolean; error?: string }> {
+    return withRetry(async () => {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ 
+          revenuecat_customer_id: customerId,
+          last_revenuecat_sync: new Date().toISOString()
+        })
+        .eq('id', userId)
+
+      if (error) {
+        console.error('❌ Error updating RevenueCat customer ID:', error)
+        throw new Error(`Failed to update RevenueCat customer ID: ${error.message}`)
+      }
+
+      console.log('✅ RevenueCat customer ID updated successfully')
+      return { success: true }
+    }, 'updateRevenueCatCustomerId')
+  }
+
+  // Get profile with RevenueCat data
+  async getProfileWithRevenueCat(userId: string): Promise<Tables<'profiles'>['Row'] | null> {
+    return withRetry(async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+
+      if (error) {
+        console.error('❌ Error getting profile with RevenueCat data:', error)
+        throw new Error(`Failed to get profile: ${error.message}`)
+      }
+
+      return data
+    }, 'getProfileWithRevenueCat')
+  }
+
+  // Helper method to determine subscription tier from product ID
+  getSubscriptionTierFromProductId(productId: string): 'free' | 'weekly' | 'monthly' | 'yearly' {
+    if (productId.includes('weekly')) return 'weekly'
+    if (productId.includes('monthly')) return 'monthly'  
+    if (productId.includes('yearly')) return 'yearly'
+    return 'free'
+  }
+
+  // Invalidate cache for user subscription data
+  invalidateSubscriptionCache(userId: string): void {
+    const cacheKeys = [
+      `user_state_${userId}`,
+      `profile_${userId}`,
+      `subscription_info_${userId}`,
+      `trial_eligibility_${userId}`
+    ]
+    
+    cacheKeys.forEach(key => {
+      performanceCache.delete(key)
+    })
+    
+    console.log('🗑️ Subscription cache invalidated for user:', userId)
   }
 }
 
